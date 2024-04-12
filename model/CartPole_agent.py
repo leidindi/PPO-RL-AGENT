@@ -251,3 +251,28 @@ print('Complete')
 plot_durations(show_result=True)
 plt.ioff()
 plt.show()
+
+torch.save(policy_net, "cartpole_dqn.pt")
+env = gym.make("CartPole-v1", render_mode='human')
+
+episodes = 10
+for episode in range(episodes):
+    state, info = env.reset()
+    state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+    while not terminated:
+        action = select_action(state)
+        observation, reward, terminated, truncated, _ = env.step(action.item())
+        reward = torch.tensor([reward], device=device)
+        done = terminated or truncated
+
+        if terminated:
+            next_state = None
+        else:
+            next_state = torch.tensor(observation, dtype=torch.float32, device=device).unsqueeze(0)
+
+        memory.push(state, action, next_state, reward)
+
+        env.render()
+
+        # Move to the next state
+        state = next_state

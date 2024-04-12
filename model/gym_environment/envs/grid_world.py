@@ -16,9 +16,11 @@ class GridWorldEnv(gym.Env):
         # In this case it is location encoded as {0, ..., `size`}^2
 
         self.observation_space = spaces.Dict (
-            {
-                "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
-                "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+            spaces = {
+                "agent": spaces.Box(low=0, high=size - 1, shape=(2,), dtype=int),
+                "target": spaces.Box(low=0, high=size - 1, shape=(2,), dtype=int),
+                "bonus": spaces.Box(low=-1, high=size - 1, shape=(2,), dtype=int),
+                "collected": spaces.Discrete(2)
             }
         )
 
@@ -33,10 +35,15 @@ class GridWorldEnv(gym.Env):
 
         self._action_to_direction = {
             0: np.array([1,0]),
-            1: np.array([1,0]),
-            2: np.array([1,0]),
-            3: np.array([1,0]),
+            1: np.array([0,1]),
+            2: np.array([-1,0]),
+            3: np.array([0,-1]),
         }
+
+        self.count = 0.0
+        self.max_count = 100.0
+        self.collected = False
+        self.first_time = True
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -53,16 +60,24 @@ class GridWorldEnv(gym.Env):
 
     # This method will generate the observations from the environment space
     def _get_obs(self):
-        return {"agent": self._agent_location, "target": self._target_location}
+        self.current_state['agent'] = np.array(self._agent_location, dtype=int)
+        self.current_state['target'] = np.array(self._target_location, dtype=int)
+        self.current_state['bonus'] = np.array(self._bonus_location, dtype=int)
+        self.current_state['collected'] = 1 if self.collected else 0
+        return self.current_state
     
     # This method will generate the manhattan distance as extra information
     # Individual reward term should be defined here
     def _get_info(self):
         return {
             "distance": np.linalg.norm(
-                self._agent_location - self._target_location, ord=1
+                self._agent_location - self._target_location, ord=1,
             )
         }
+    
+    def _get_reward(self):
+        # print( 1.0 - 0.9 * self.count / self.max_count)
+        return (1.0 - 0.9 * (self.count / self.max_count))
     
     """
     Reset is called to create a new episode
@@ -76,6 +91,11 @@ class GridWorldEnv(gym.Env):
     def reset(self, seed=None, options=None):
         # Setting the seed of the np_random
         super().reset(seed=seed)
+        self.count=0.0
+        self.collected=False
+        self.first_time=True
+        # Init the state
+        self.current_state = self.observation_space.sample()
 
         # Random position for the agent at the start
         self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
@@ -84,6 +104,12 @@ class GridWorldEnv(gym.Env):
         self._target_location = self._agent_location
         while np.array_equal(self._target_location, self._agent_location):
             self._target_location = self.np_random.integers(
+                0, self.size, size=2, dtype=int
+            )
+
+        self._bonus_location = self._target_location
+        while np.array_equal(self._bonus_location, self._target_location):
+            self._bonus_location = self.np_random.integers(
                 0, self.size, size=2, dtype=int
             )
         
@@ -116,17 +142,25 @@ class GridWorldEnv(gym.Env):
         self._agent_location = np.clip(
             self._agent_location + direction, 0, self.size-1
         )
+
+        self.count+=1
         
+        # Check if reward is collected
+        self.collected = np.array_equal(self._agent_location, self._bonus_location)
+
         # Check if episode is done
         terminated = np.array_equal(self._agent_location, self._target_location)
-        reward = 1 if terminated else 0 # Biinary Sparse Rewards
+        truncated = self.count > self.max_count
+        reward = self._get_reward() if terminated else -0.1  # Binary Sparse Rewards
         observation = self._get_obs()
         info = self._get_info()
+
+            
 
         if self.render_mode == "human":
             self._render_frame()
 
-        return observation, reward, terminated, False, info
+        return observation, reward, terminated, truncated, info
     
     # Using PyGame to render the game. This is not needed for the final project
     def render(self):
@@ -141,7 +175,7 @@ class GridWorldEnv(gym.Env):
                 (self.window_size, self.window_size)
             )
 
-        if self.clock in None and self.render_mode == "human":
+        if self.clock is None and self.render_mode == "human":
             self.clock = pygame.time.Clock()
 
         canvas = pygame.Surface((self.window_size, self.window_size))
@@ -155,7 +189,7 @@ class GridWorldEnv(gym.Env):
             canvas,
             (255, 0, 0),
             pygame.Rect(
-                pix_square_size * self._target_location,
+                (pix_square_size * self._target_location),
                 (pix_square_size, pix_square_size)
             ),
         )
@@ -164,11 +198,18 @@ class GridWorldEnv(gym.Env):
         pygame.draw.circle(
             canvas,
             (0, 0, 255),
-            pygame.Rect(
-                pix_square_size * self._agent_location,
-                pix_square_size / 3
-            ),
+            tuple(e + pix_square_size/2 for e in (pix_square_size * self._agent_location)),
+            pix_square_size / 3,
         )
+
+        # Drawing the bonus
+        if self.first_time == True:
+            pygame.draw.circle(
+                canvas,
+                (0, 255, 0),
+                tuple(e + pix_square_size/2 for e in (pix_square_size * self._bonus_location)),
+                pix_square_size / 3,
+            )
 
         # Adding gridlines
         for x in range(self.size + 1):
