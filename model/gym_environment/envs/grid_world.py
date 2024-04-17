@@ -75,9 +75,15 @@ class GridWorldEnv(gym.Env):
             )
         }
     
-    def _get_reward(self):
-        # print( 1.0 - 0.9 * self.count / self.max_count)
-        return (1.0 - 0.9 * (self.count / self.max_count))
+    def _get_reward(self, terminated):
+        if np.array_equal(self._agent_location, self._bonus_location) and self.first_time:
+            reward = 1
+            self.first_time = False
+        elif terminated:
+            reward = 1
+        else:
+            reward = -0.1
+        return reward
     
     """
     Reset is called to create a new episode
@@ -146,12 +152,13 @@ class GridWorldEnv(gym.Env):
         self.count+=1
         
         # Check if reward is collected
-        self.collected = np.array_equal(self._agent_location, self._bonus_location)
+        if np.array_equal(self._agent_location, self._bonus_location):
+            self.collected = True
 
         # Check if episode is done
-        terminated = np.array_equal(self._agent_location, self._target_location)
+        terminated = np.array_equal(self._agent_location, self._target_location) and self.collected
         truncated = self.count > self.max_count
-        reward = self._get_reward() if terminated else -0.1  # Binary Sparse Rewards
+        reward = self._get_reward(terminated) # Binary Sparse Rewards
         observation = self._get_obs()
         info = self._get_info()
 
@@ -184,10 +191,11 @@ class GridWorldEnv(gym.Env):
             self.window_size / self.size
         )
 
+        color = (255,0, 0) if self.collected else (255, 165, 0)
         # Drawing the target
         pygame.draw.rect(
             canvas,
-            (255, 0, 0),
+            color,
             pygame.Rect(
                 (pix_square_size * self._target_location),
                 (pix_square_size, pix_square_size)
@@ -203,7 +211,7 @@ class GridWorldEnv(gym.Env):
         )
 
         # Drawing the bonus
-        if self.first_time == True:
+        if not self.collected:
             pygame.draw.circle(
                 canvas,
                 (0, 255, 0),

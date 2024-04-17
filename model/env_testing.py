@@ -1,4 +1,8 @@
 import gymnasium
+import random
+import numpy as np
+import os
+import pandas as pd
 from gymnasium.wrappers import FlattenObservation
 from gymnasium.spaces.utils import flatten_space
 
@@ -10,4 +14,9 @@ print(env.observation_space.shape)
 
 print(flatten_space(env.observation_space).shape)
 
-wrapper = FlattenObservation(env)
+env = FlattenObservation(env)
+
+observation, info = env.reset()
+for i in range(100):
+    observation, reward, terminated, truncated, info = env.step(0)
+    print("Observation:{} Reward:{}".format(observation, reward))

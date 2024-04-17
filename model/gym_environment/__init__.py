@@ -10,5 +10,5 @@ register(
 register(
     id="gym_environment/SimpleBattery",
     entry_point="gym_environment.envs:SimpleBatteryEnv",
-    max_episode_steps=300
+    max_episode_steps=3000000000
 )
