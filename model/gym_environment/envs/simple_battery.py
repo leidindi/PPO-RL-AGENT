@@ -9,11 +9,7 @@ from gymnasium import spaces
 cur_path = os.path.dirname(os.path.realpath(__file__))
 data_path = os.path.join(cur_path, "../../data/df_imb.csv")
 imb = pd.read_csv(data_path)
-imb_sub = imb[['dates', 'imbalance_take_price', 'imbalance_feed_price']]
-print(imb_sub.sample())
-print(imb_sub.shape)
-print(imb_sub['imbalance_feed_price'].min())
-print(imb_sub['imbalance_feed_price'].max())
+imb_sub = imb[['dates', 'min_price', 'mid_price', 'max_price', 'imbalance_take_price', 'imbalance_feed_price', 'imbalance_regulation_state']]
 
 class SimpleBatteryEnv(gym.Env):
     metadata = {"render_modes": ['human', 'rgb_array']}
@@ -64,6 +60,9 @@ class SimpleBatteryEnv(gym.Env):
         self.days = 30
         self.max_count = self.minutes_per_day * self.days
 
+        self.best_feed_price = 0
+        self.best_take_price = 0
+
         # Action space encoded by Discrete numbers
         # "charge" "discharge" "nothing"
         self.action_space = spaces.Discrete(3)  
@@ -71,9 +70,48 @@ class SimpleBatteryEnv(gym.Env):
 
     # This method will generate the observations from the environment space
     def _get_obs(self):
+        i = self.start_minute + self.count
+        reg_state = self.imb['imbalance_regulation_state'][i]
+
+        if self.count % 15 == 0:
+            self.best_feed_price = float('inf')
+            self.best_take_price = float('-inf')
+
+        min_price = self.imb['min_price'][i]
+        mid_price = self.imb['mid_price'][i]
+        max_price = self.imb['max_price'][i]
+
+        if reg_state == 0:
+            self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
+            self.current_state['energy_take_price'] = np.array([mid_price], dtype=float)
+            self.current_state['energy_feed_price'] = np.array([mid_price], dtype=float)
+
+            return self.current_state
+        elif reg_state == -1:
+            if min_price is None:
+                self.best_take_price = min(mid_price, self.best_take_price)
+            else:
+                self.best_take_price = min(min_price, self.best_take_price)
+            self.best_feed_price = self.best_take_price
+        elif reg_state == 1:
+            if max_price is None:
+                self.best_feed_price = max(mid_price, self.best_feed_price)
+            else:
+                self.best_feed_price = max(max_price, self.best_feed_price)
+            self.best_take_price = self.best_feed_price
+        elif reg_state == 2:
+            if max_price is None:
+                self.best_feed_price = max(mid_price, self.best_feed_price)
+            else:
+                self.best_feed_price = max(max_price, self.best_feed_price)
+            if min_price is None:
+                self.best_take_price = min(mid_price, mid_price, self.best_take_price)
+            else:
+                self.best_take_price = min(min_price, mid_price, self.best_take_price)
+
         self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
-        self.current_state['energy_take_price'] = np.array([self.imb['imbalance_take_price'][self.start_minute + self.count]], dtype=float)
-        self.current_state['energy_feed_price'] = np.array([self.imb['imbalance_feed_price'][self.start_minute + self.count]], dtype=float)
+        self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
+        self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
         return self.current_state
     
     # This method will generate the manhattan distance as extra information
@@ -91,10 +129,11 @@ class SimpleBatteryEnv(gym.Env):
             return charge_per_minute
 
     def _get_reward(self, charge_per_minute):
+        i = self.start_minute + self.count
         if charge_per_minute > 0:
-            price_per_kW = self.current_state['energy_take_price'][0] / 1000.0
+            price_per_kW = self.imb['imbalance_take_price'][i] / 1000.0
         else:
-            price_per_kW = self.current_state['energy_feed_price'][0] / 1000.0
+            price_per_kW = self.imb['imbalance_feed_price'][i] / 1000.0
         reward_per_minute = -(charge_per_minute * price_per_kW)
         return reward_per_minute
     
@@ -115,6 +154,7 @@ class SimpleBatteryEnv(gym.Env):
 
         # random start minute
         # self.start_minute = self.np_random.integers(0, self.imb.shape[0] - (self.days * self.minutes_per_day))
+        # Make sure that this is always at the start of a 15 minute block otherwise the reward function will break
         self.start_minute = 1305
 
         # Init the state
