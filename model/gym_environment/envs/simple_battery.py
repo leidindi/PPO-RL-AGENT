@@ -61,23 +61,12 @@ class SimpleBatteryEnv(gym.Env):
         self.start_day = 0
         self.count = 0
         self.minutes_per_day = 1440
-        self.days = 7
+        self.days = 30
         self.max_count = self.minutes_per_day * self.days
 
         # Action space encoded by Discrete numbers
         # "charge" "discharge" "nothing"
-        self.action_space = spaces.Discrete(3)
-
-
-    def _get_energy_price(self):
-        if self.count <= self.max_count * 0.25:
-            return 1
-        if self.count <= self.max_count * 0.5:
-            return -1
-        if self.count <= self.max_count * 0.75:
-            return 1
-        if self.count <= self.max_count + 1:
-            return -1     
+        self.action_space = spaces.Discrete(3)  
 
 
     # This method will generate the observations from the environment space
