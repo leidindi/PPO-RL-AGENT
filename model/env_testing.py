@@ -17,7 +17,7 @@ print(flatten_space(env.observation_space).shape)
 env = FlattenObservation(env)
 
 observation, info = env.reset()
-for i in range(225):
+for i in range(1):
     observation, reward, terminated, truncated, info = env.step(0)
     print("Info:{}".format(info))
     print("Observation:{} Reward:{}".format(observation, reward))

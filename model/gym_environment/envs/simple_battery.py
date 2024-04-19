@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import pandas as pd
+import math
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -158,7 +159,11 @@ class SimpleBatteryEnv(gym.Env):
         # random start minute
         # self.start_minute = self.np_random.integers(0, self.imb.shape[0] - (self.days * self.minutes_per_day))
         # Make sure that this is always at the start of a 15 minute block otherwise the reward function will break
-        self.start_minute = 1305
+        # self.start_minute = 1305 + (10080*10)
+
+        # Training
+        self.start_minute = self.np_random.integers(0, math.floor((self.imb.shape[0] - (self.days*self.minutes_per_day))/15)) * 15
+        assert self.start_minute % 15 == 0
 
         # Init the state
         self.current_state = self.observation_space.sample()
