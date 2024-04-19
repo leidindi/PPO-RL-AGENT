@@ -14,8 +14,9 @@ imb_sub = imb[['dates', 'min_price', 'mid_price', 'max_price', 'imbalance_take_p
 class SimpleBatteryEnv(gym.Env):
     metadata = {"render_modes": ['human', 'rgb_array']}
 
-    def __init__(self, seed=None):
+    def __init__(self, days=1, seed=None):
         super().reset(seed=seed)
+        super(SimpleBatteryEnv, self).__init__()
 
         # Battery Capacity in kWh
         self.capacity = 6000.0
@@ -57,7 +58,7 @@ class SimpleBatteryEnv(gym.Env):
         self.start_day = 0
         self.count = 0
         self.minutes_per_day = 1440
-        self.days = 30
+        self.days = days
         self.max_count = self.minutes_per_day * self.days
 
         self.best_feed_price = 0
@@ -74,8 +75,8 @@ class SimpleBatteryEnv(gym.Env):
         reg_state = self.imb['imbalance_regulation_state'][i]
 
         if self.count % 15 == 0:
-            self.best_feed_price = float('inf')
-            self.best_take_price = float('-inf')
+            self.best_feed_price = float('-inf')
+            self.best_take_price = float('inf')
 
         min_price = self.imb['min_price'][i]
         mid_price = self.imb['mid_price'][i]
@@ -88,23 +89,25 @@ class SimpleBatteryEnv(gym.Env):
 
             return self.current_state
         elif reg_state == -1:
-            if min_price is None:
+            if np.isnan(min_price) and self.best_take_price == float('inf'):
                 self.best_take_price = min(mid_price, self.best_take_price)
-            else:
+            elif not np.isnan(min_price):
                 self.best_take_price = min(min_price, self.best_take_price)
             self.best_feed_price = self.best_take_price
+
         elif reg_state == 1:
-            if max_price is None:
+            if np.isnan(max_price) and self.best_feed_price == float('-inf'):
                 self.best_feed_price = max(mid_price, self.best_feed_price)
-            else:
+            elif not np.isnan(max_price):
                 self.best_feed_price = max(max_price, self.best_feed_price)
+
             self.best_take_price = self.best_feed_price
         elif reg_state == 2:
-            if max_price is None:
+            if np.isnan(max_price):
                 self.best_feed_price = max(mid_price, self.best_feed_price)
             else:
                 self.best_feed_price = max(max_price, self.best_feed_price)
-            if min_price is None:
+            if np.isnan(min_price):
                 self.best_take_price = min(mid_price, mid_price, self.best_take_price)
             else:
                 self.best_take_price = min(min_price, mid_price, self.best_take_price)
@@ -117,7 +120,7 @@ class SimpleBatteryEnv(gym.Env):
     # This method will generate the manhattan distance as extra information
     # Individual reward term should be defined here
     def _get_info(self):
-        return {'date': self.imb['dates'][self.start_minute+self.count]}
+        return {'imb': self.imb.iloc[self.start_minute+self.count]}
         
     # how many kW charged in the last minute
     def _get_charged_minute(self, charge_per_minute):
@@ -188,15 +191,14 @@ class SimpleBatteryEnv(gym.Env):
         # Determine charge amount
         charge_per_minute = self._get_charged_minute(self._action_to_charge[action])
         self._battery_charge = self._battery_charge + charge_per_minute
-        
-        self.count+=1
 
         # Check if episode is done
-        terminated = self.count > self.max_count
-        truncated = self.count > self.max_count
+        terminated = self.count >= self.max_count
+        truncated = self.count >= self.max_count
 
         observation = self._get_obs()
         reward = self._get_reward(charge_per_minute)  # Minute price
         info = self._get_info()
 
+        self.count+=1
         return observation, reward, terminated, truncated, info
