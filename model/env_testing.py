@@ -6,7 +6,7 @@ import pandas as pd
 from gymnasium.wrappers import FlattenObservation
 from gymnasium.spaces.utils import flatten_space
 
-env = gymnasium.make('gym_environment:gym_environment/SimpleBattery')
+env = gymnasium.make('gym_environment:gym_environment/SimpleBattery', predict=True, start_offset=0)
 print(env.observation_space.is_np_flattenable)
 print(env.observation_space.sample())
 # wrapped_env = FlattenObservation(env)

@@ -10,12 +10,16 @@ from gymnasium import spaces
 cur_path = os.path.dirname(os.path.realpath(__file__))
 data_path = os.path.join(cur_path, "../../data/df_imb.csv")
 imb = pd.read_csv(data_path)
-imb_sub = imb[['dates', 'min_price', 'mid_price', 'max_price', 'imbalance_take_price', 'imbalance_feed_price', 'imbalance_regulation_state']]
+imb = imb[['dates', 'min_price', 'mid_price', 'max_price', 'imbalance_take_price', 'imbalance_feed_price', 'imbalance_regulation_state']]
+imb['dates'] = pd.to_datetime(imb['dates'], format='%d-%m-%Y %H:%M:%S')
+imb['DayOfYear'] = imb['dates'].dt.dayofyear
+imb['Hour'] = imb['dates'].dt.hour
+
 
 class SimpleBatteryEnv(gym.Env):
     metadata = {"render_modes": ['human', 'rgb_array']}
 
-    def __init__(self, days=1, seed=None):
+    def __init__(self, days=1, predict=False, start_offset=0, seed=None):
         super().reset(seed=seed)
         super(SimpleBatteryEnv, self).__init__()
 
@@ -29,7 +33,7 @@ class SimpleBatteryEnv(gym.Env):
         self.charge_per_minute = self.charge_rate / 60.0
 
         # Imbalance data               
-        self.imb = imb_sub
+        self.imb = imb
 
         # Max energy price
         energy_take_max = self.imb['imbalance_take_price'].max()
@@ -47,6 +51,8 @@ class SimpleBatteryEnv(gym.Env):
                 "battery_charge": spaces.Box(low=self.capacity * 0.1, high=self.capacity * 0.9, shape=(1,), dtype=float),
                 "energy_take_price": spaces.Box(low=energy_take_min, high=energy_take_max, shape=(1,), dtype=float),
                 "energy_feed_price": spaces.Box(low=energy_feed_min, high=energy_feed_max, shape=(1,), dtype=float),
+                "day_of_year": spaces.Discrete(366, start=1),
+                "hour_of_day": spaces.Discrete(24),
             }
         )
 
@@ -56,10 +62,12 @@ class SimpleBatteryEnv(gym.Env):
             2 : 0
         }
 
-        self.start_day = 0
         self.count = 0
         self.minutes_per_day = 1440
         self.days = days
+        self.start_offset = start_offset
+        self.predict = predict
+
         self.max_count = self.minutes_per_day * self.days
 
         self.best_feed_price = 0
@@ -116,6 +124,8 @@ class SimpleBatteryEnv(gym.Env):
         self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
         self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
         self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
+        self.current_state['day_of_year'] = np.int64(self.imb['DayOfYear'][i])
+        self.current_state['hour_of_day'] = np.int64(self.imb['Hour'][i])
         return self.current_state
     
     # This method will generate the manhattan distance as extra information
@@ -159,11 +169,12 @@ class SimpleBatteryEnv(gym.Env):
         # random start minute
         # self.start_minute = self.np_random.integers(0, self.imb.shape[0] - (self.days * self.minutes_per_day))
         # Make sure that this is always at the start of a 15 minute block otherwise the reward function will break
-        # self.start_minute = 1305 + (10080*10)
-
-        # Training
-        self.start_minute = self.np_random.integers(0, math.floor((self.imb.shape[0] - (self.days*self.minutes_per_day))/15)) * 15
-        assert self.start_minute % 15 == 0
+        if self.predict:
+            self.start_minute = self.start_offset
+        else:
+        # # Training
+            self.start_minute = self.np_random.integers(0, math.floor((self.imb.shape[0] - (self.days*self.minutes_per_day))/15)) * 15
+            assert self.start_minute % 15 == 0
 
         # Init the state
         self.current_state = self.observation_space.sample()
