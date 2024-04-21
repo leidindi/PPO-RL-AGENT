@@ -17,7 +17,26 @@ print(flatten_space(env.observation_space).shape)
 env = FlattenObservation(env)
 
 observation, info = env.reset()
-for i in range(1):
+
+print("_______")
+count = 0
+length = 100000
+for i in range(length):
     observation, reward, terminated, truncated, info = env.step(0)
-    print("Info:{}".format(info))
-    print("Observation:{} Reward:{}".format(observation, reward))
+    if i % 100000 == 0:
+        print(i)
+    if (i+1) % 15 == 0:
+        imbalance_take_price = info['imb']['imbalance_take_price']
+        imbalance_feed_price = info['imb']['imbalance_feed_price']
+        calculated_take_price = info['current_state']['energy_take_price'][0]
+        calculated_feed_price = info['current_state']['energy_feed_price'][0]
+        if imbalance_take_price != calculated_take_price or imbalance_feed_price != calculated_feed_price:
+            # print("___")
+            # print("reg_stat:{}".format(info['imb']['imbalance_regulation_state']))
+            # print("Date:{} Time:{}".format(info['imb']['date'], info['imb']['time']))
+            # print("Info_feed:{} Info_take:{}".format(imbalance_feed_price, imbalance_take_price))
+            # print("Obs_feed:{} Obs_take:{}".format(calculated_feed_price, calculated_take_price))
+            count+=1
+    # print("Observation:{} Reward:{}".format(observation, reward))
+
+print("Error rate:{}".format(count/length))
