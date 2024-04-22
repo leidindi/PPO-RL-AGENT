@@ -56,7 +56,7 @@ class SimpleBatteryEnv(gym.Env):
                 "battery_charge": spaces.Box(low=self.capacity * 0.1, high=self.capacity * 0.9, shape=(1,), dtype=float),
                 "energy_take_price": spaces.Box(low=energy_take_min, high=energy_take_max, shape=(1,), dtype=float),
                 "energy_feed_price": spaces.Box(low=energy_feed_min, high=energy_feed_max, shape=(1,), dtype=float),
-                "regulation_state": spaces.Discrete(4, start=-1),
+                # "regulation_state": spaces.Discrete(4, start=-1),
                 "day_of_year": spaces.Discrete(366, start=1),
                 "hour_of_day": spaces.Discrete(24),
             }
@@ -101,8 +101,8 @@ class SimpleBatteryEnv(gym.Env):
 
         if reg_state == 0:
             self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
-            self.current_state['energy_take_price'] = np.array([self.imb['imbalance_take_price'][i]], dtype=float)
-            self.current_state['energy_feed_price'] = np.array([self.imb['imbalance_feed_price'][i]], dtype=float)
+            self.current_state['energy_take_price'] = np.array([medium_price], dtype=float)
+            self.current_state['energy_feed_price'] = np.array([medium_price], dtype=float)
 
             return self.current_state
         elif reg_state == -1:
@@ -148,7 +148,7 @@ class SimpleBatteryEnv(gym.Env):
         self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
         self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
         self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
-        self.current_state['regulation_state'] = np.int64(reg_state)
+        # self.current_state['regulation_state'] = np.int64(reg_state)
         self.current_state['day_of_year'] = np.int64(self.imb['day_of_year'][i])
         self.current_state['hour_of_day'] = np.int64(self.imb['hour_of_day'][i])
         return self.current_state
