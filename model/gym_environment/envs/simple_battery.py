@@ -19,11 +19,19 @@ class SimpleBatteryEnv(gym.Env):
         super().reset(seed=seed)
         super(SimpleBatteryEnv, self).__init__()
 
+        # TODO: max amount of cycles per year\
+        # aangehouden in baseline is 350
+        # mag naar 500
+
         # Battery Capacity in kWh
         self.capacity = 6000.0
 
         # Charge rate in kilo Watt per hour = kWh
         self.charge_rate = 600.0
+
+        # Euro per mwh
+        self.charge_penalty_mwh = 20.0
+        self.charge_penalty_kwh = self.charge_penalty_mwh / 1000.0
 
         # kilo Watt hour per minute
         self.charge_per_minute = self.charge_rate / 60.0
@@ -42,6 +50,7 @@ class SimpleBatteryEnv(gym.Env):
         # Observation sapce is the opservations made / information
         # Battery charge is in kilo Wh
         # Energy price is in euro per mega watt hour
+        # TODO: Regulation state moet er uit, wordt anders berekend
         self.observation_space = spaces.Dict (
             spaces = {
                 "battery_charge": spaces.Box(low=self.capacity * 0.1, high=self.capacity * 0.9, shape=(1,), dtype=float),
@@ -164,7 +173,9 @@ class SimpleBatteryEnv(gym.Env):
             price_per_kW = self.current_state['energy_take_price'][0] / 1000.0
         else:
             price_per_kW = self.current_state['energy_feed_price'][0] / 1000.0
-        reward_per_minute = -(charge_per_minute * price_per_kW)
+
+        # TODO: Check if this works
+        reward_per_minute = -(charge_per_minute * price_per_kW) - (self.charge_penalty_kwh * np.abs(charge_per_minute))
         return reward_per_minute
     
     """
