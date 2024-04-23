@@ -30,7 +30,7 @@ class SimpleBatteryEnv(gym.Env):
         self.charge_rate = 600.0
 
         # Euro per mwh
-        self.charge_penalty_mwh = 20.0
+        self.charge_penalty_mwh = 10.0
         self.charge_penalty_kwh = self.charge_penalty_mwh / 1000.0
 
         # kilo Watt hour per minute
@@ -62,6 +62,7 @@ class SimpleBatteryEnv(gym.Env):
             }
         )
 
+        # Charge, Discharge, Nothing
         self._action_to_charge = {
             0 : self.charge_per_minute,
             1 : -self.charge_per_minute,
@@ -137,7 +138,7 @@ class SimpleBatteryEnv(gym.Env):
             if np.isnan(high_feed_price):
                 self.best_feed_price = max(medium_price, self.best_feed_price)
             else:
-                self.best_feed_price = max(high_feed_price, self.best_feed_price)
+                self.best_feed_price = max(high_feed_price, medium_price, self.best_feed_price)
             if np.isnan(low_take_price):
                 self.best_take_price = min(medium_price, self.best_take_price)
             else:
