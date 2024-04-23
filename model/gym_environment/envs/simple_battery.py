@@ -36,6 +36,8 @@ class SimpleBatteryEnv(gym.Env):
         # kilo Watt hour per minute
         self.charge_per_minute = self.charge_rate / 60.0
 
+        self.battery_change = 0
+
         # Imbalance data               
         self.imb = imb
 
@@ -157,7 +159,10 @@ class SimpleBatteryEnv(gym.Env):
     # This method will generate the manhattan distance as extra information
     # Individual reward term should be defined here
     def _get_info(self):
-        return {'imb': self.imb.iloc[self.start_minute+self.count], "current_state": self.current_state}
+        charged = False
+        if self.battery_change != 0:
+            charged = True
+        return {'imb': self.imb.iloc[self.start_minute+self.count], "current_state": self.current_state, "charged": charged}
         
     # how many kW charged in the last minute
     def _get_charged_minute(self, charge_per_minute):
@@ -233,15 +238,15 @@ class SimpleBatteryEnv(gym.Env):
 
     def step(self, action):
         # Determine charge amount
-        charge_per_minute = self._get_charged_minute(self._action_to_charge[action])
-        self._battery_charge = self._battery_charge + charge_per_minute
+        self.battery_change = self._get_charged_minute(self._action_to_charge[action])
+        self._battery_charge = self._battery_charge + self.battery_change
 
         # Check if episode is done
         terminated = self.count >= self.max_count
         truncated = self.count >= self.max_count
 
         observation = self._get_obs()
-        reward = self._get_reward(charge_per_minute)  # Minute price
+        reward = self._get_reward(self.battery_change)  # Minute price
         info = self._get_info()
 
         self.count+=1
