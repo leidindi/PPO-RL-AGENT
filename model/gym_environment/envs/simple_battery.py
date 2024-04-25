@@ -15,7 +15,7 @@ imb = pd.read_csv(data_path)
 class SimpleBatteryEnv(gym.Env):
     metadata = {"render_modes": ['human', 'rgb_array']}
 
-    def __init__(self, days=1, predict=False, start_offset=0, seed=None):
+    def __init__(self, days=1, predict=False, day_offset=0, charge_penalty_mwh=8.0, seed=None):
         super().reset(seed=seed)
         super(SimpleBatteryEnv, self).__init__()
 
@@ -30,7 +30,7 @@ class SimpleBatteryEnv(gym.Env):
         self.charge_rate = 600.0
 
         # Euro per mwh
-        self.charge_penalty_mwh = 10.0
+        self.charge_penalty_mwh = charge_penalty_mwh
         self.charge_penalty_kwh = self.charge_penalty_mwh / 1000.0
 
         # kilo Watt hour per minute
@@ -74,7 +74,8 @@ class SimpleBatteryEnv(gym.Env):
         self.count = 0
         self.minutes_per_day = 1440
         self.days = days
-        self.start_offset = start_offset
+        self.day_offset = day_offset
+        self.start_offset = self.day_offset * self.minutes_per_day
         self.predict = predict
 
         self.max_count = self.minutes_per_day * self.days
