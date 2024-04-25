@@ -1,80 +1,25 @@
-import multiprocessing.pool
-import numpy as np
-import matplotlib.pyplot as plt
-import gymnasium as gym
-from gymnasium.wrappers import FlattenObservation
-import matplotlib
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Categorical
-import time
-
-# setup plots
-is_ipython = 'inline' in matplotlib.get_backend()
-if is_ipython:
-    from IPython import display
-plt.ion()
-
-def plot_durations(epoch_rewards, means, show_result=False):
-    plt.figure(1)
-    if show_result:
-        plt.title('Result')
-    else:
-        plt.clf()
-        plt.title('Training...')
-    plt.xlabel('Episode')
-    plt.ylabel('Reward')
-    plt.plot(epoch_rewards)
-
-    # Take 50 ep. Average and plot them
-    if len(epoch_rewards) >= 50:
-      mean = np.mean(epoch_rewards[-50:]) 
-    else:
-      mean = np.mean(epoch_rewards)
-
-    means.append(mean)
-    
-    plt.plot(means)
-
-    plt.pause(0.0001) # pause a bit to update plots
-    if is_ipython:
-        if not show_result:
-            display.display(plt.gcf())
-            display.clear_output(wait=True) 
-        else:
-            display.display(plt.gcf())
-
-    return means
+import gymnasium as gym
+import numpy as np
+import matplotlib.pyplot as plt
 
 class ActorCritic(nn.Module):
-    def __init__(self, input_size, hidden_size, num_actions):
+    def __init__(self, input_size, num_actions):
         super(ActorCritic, self).__init__()
-        self.actor_layers = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, num_actions)
-        )
-
-        self.critic_layers = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, 1)
-        )
+        self.fc1 = nn.Linear(input_size, 128)
+        self.fc_actor = nn.Linear(128, num_actions)
+        self.fc_critic = nn.Linear(128, 1)
 
     def forward(self, x):
-        policy = F.softmax(self.actor_layers(x), dim=-1)
-        value = self.critic_layers(x)
+        x = F.relu(self.fc1(x))
+        policy = F.softmax(self.fc_actor(x), dim=-1)
+        value = self.fc_critic(x)
         return policy, value
-    
-    def select_action(self, x):
-        return torch.multinomial(self(x), 1).detach().numpy()
-    
+
 def compute_returns(rewards, gamma):
     returns = []
     R = 0
@@ -85,24 +30,17 @@ def compute_returns(rewards, gamma):
     returns = (returns - returns.mean()) / (returns.std() + 1e-5)  # Normalize returns
     return returns
 
-def train(num_episodes, gamma):
-    days = 1
-    day_offset = 0
-    charge_penatly_mwh = 0.0
-
-    env = gym.make('gym_environment:gym_environment/SimpleBattery', days=days, predict=True, day_offset=day_offset, charge_penalty_mwh=charge_penatly_mwh)
-    env = FlattenObservation(env)
+def train(env_name, num_episodes, gamma):
+    env = gym.make(env_name, max_episode_steps=600)
     input_size = env.observation_space.shape[0]
     num_actions = env.action_space.n
 
-    model = ActorCritic(input_size, input_size*2, num_actions)
+    model = ActorCritic(input_size, num_actions)
     optimizer = optim.Adam(model.parameters(), lr=1e-2)
 
     all_rewards = []
-    means = []
 
     for episode in range(num_episodes):
-        start_time = time.time()
         log_probs = []
         values = []
         rewards = []
@@ -116,13 +54,16 @@ def train(num_episodes, gamma):
             dist = Categorical(policy)
             action = dist.sample()
             log_prob = dist.log_prob(action)
-            next_state, reward, done, _, _ = env.step(action.item())
+
+            next_state, reward, done, truncated, _ = env.step(action.item())
 
             log_probs.append(log_prob)
             values.append(value)
             rewards.append(reward)
 
             state = next_state
+            if truncated:
+                break
 
         all_rewards.append(sum(rewards))
 
@@ -139,19 +80,21 @@ def train(num_episodes, gamma):
         (actor_loss + critic_loss).backward()
         optimizer.step()
 
-        end_time = time.time()
-        epoch_time = end_time - start_time
-
         if (episode + 1) % 10 == 0:
             print(f"Episode {episode + 1}/{num_episodes}, Total Reward: {sum(rewards)}")
-        print("Time until done: {}s".format(round(epoch_time * num_episodes - epoch_time * episode, 4)))
-        means = plot_durations(all_rewards, means)
 
     env.close()
     return all_rewards
 
 if __name__ == "__main__":
-    num_episodes = 600
+    env_name = 'CartPole-v1'
+    num_episodes = 200
     gamma = 0.99
 
-    all_rewards = train(num_episodes, gamma)
+    all_rewards = train(env_name, num_episodes, gamma)
+
+    plt.plot(all_rewards)
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward')
+    plt.title('A2C Training Progress')
+    plt.show()
