@@ -29,36 +29,38 @@ class ActorCritic(nn.Module):
 
 		self.gamma = gamma
 
-		self.conv_layers = nn.Sequential(
-			nn.Conv1d(in_channels=input_dims[0], out_channels=32, kernel_size=1),
-			nn.ReLU(),
-			nn.Conv1d(in_channels=32, out_channels=64, kernel_size=1),
-			nn.ReLU(),
-			nn.Conv1d(in_channels=64, out_channels=128, kernel_size=1),
-			nn.ReLU(),
-		)
+		# self.conv_layers = nn.Sequential(
+		# 	nn.Conv1d(in_channels=input_dims[0], out_channels=32, kernel_size=1),
+		# 	nn.ReLU(),
+		# 	nn.Conv1d(in_channels=32, out_channels=64, kernel_size=1),
+		# 	nn.ReLU(),
+		# 	nn.Conv1d(in_channels=64, out_channels=128, kernel_size=1),
+		# 	nn.ReLU(),
+		# )
 
-		# Calculate the shape of the output from the convolutional layers
-		conv_output_size = self.get_conv_output_size(input_dims)
+		# # Calculate the shape of the output from the convolutional layers
+		# conv_output_size = self.get_conv_output_size(input_dims)
         
-		self.lstm = nn.LSTM(input_size=conv_output_size, hidden_size=64, batch_first=True)
+		# self.lstm = nn.LSTM(input_size=conv_output_size, hidden_size=64, batch_first=True)
 
-		self.fc_layers = nn.Sequential(
-			nn.Linear(64, 128),
-			nn.ReLU(),
-			nn.Linear(128, n_actions)
-		)
+		# self.fc_layers = nn.Sequential(
+		# 	nn.Linear(64, 128),
+		# 	nn.ReLU(),
+		# 	nn.Linear(128, n_actions)
+		# )
 
-		self.v_layers = nn.Sequential(
-			nn.Linear(64, 128),
-			nn.ReLU(),
-			nn.Linear(128, 1)
-		)
+		# self.v_layers = nn.Sequential(
+		# 	nn.Linear(64, 128),
+		# 	nn.ReLU(),
+		# 	nn.Linear(128, 1)
+		# )
 
-		# self.pi1 = nn.Linear(*input_dims, 128)  
-		# self.v1 = nn.Linear(*input_dims, 128)
-		# self.pi = nn.Linear(128, n_actions)
-		# self.v = nn.Linear(128, 1)
+		self.pi1 = nn.Linear(*input_dims, 128)  
+		self.pi2 = nn.Linear(128, 128)  
+		self.pi = nn.Linear(128, n_actions)
+
+		self.v1 = nn.Linear(*input_dims, 128)
+		self.v = nn.Linear(128, 1)
 
 		self.rewards = []
 		self.actions = []
@@ -75,28 +77,29 @@ class ActorCritic(nn.Module):
 		self.rewards = []
 
 	def forward(self, state):
-		# pi1 = F.relu(self.pi1(state))
-		# v1 = F.relu(self.v1(state))
+		pi1 = F.relu(self.pi1(state))
+		pi2 = F.tanh(self.pi2(pi1))
+		v1 = F.relu(self.v1(state))
 
-		# pi = self.pi(pi1.squeeze(1))
-		# v = self.v(v1.squeeze(1))
-		state = state.unsqueeze(2)
+		pi = self.pi(pi2.squeeze(1))
+		v = self.v(v1.squeeze(1))
+		# state = state.unsqueeze(2)
 	
 		# for layer in self.conv_layers:
 		# 	state = layer(state)
 		# 	print(state.size())
 	
-		pi = self.conv_layers(state)
-		pi = pi.view(pi.size(0), -1)  # Flatten the output for the RNN
-		pi, _ = self.lstm(pi.unsqueeze(1))  # Add a time dimension (batch_size, seq_len, input_size)
-		pi = pi.squeeze(1)  # Remove the time dimension
-		pi = self.fc_layers(pi)
+		# pi = self.conv_layers(state)
+		# pi = pi.view(pi.size(0), -1)  # Flatten the output for the RNN
+		# pi, _ = self.lstm(pi.unsqueeze(1))  # Add a time dimension (batch_size, seq_len, input_size)
+		# pi = pi.squeeze(1)  # Remove the time dimension
+		# pi = self.fc_layers(pi)
 
-		v = self.conv_layers(state)
-		v = v.view(v.size(0), -1)  # Flatten the output for the RNN
-		v, _ = self.lstm(v.unsqueeze(1))  # Add a time dimension (batch_size, seq_len, input_size)
-		v = v.squeeze(1)  # Remove the time dimension
-		v = self.v_layers(v)
+		# v = self.conv_layers(state)
+		# v = v.view(v.size(0), -1)  # Flatten the output for the RNN
+		# v, _ = self.lstm(v.unsqueeze(1))  # Add a time dimension (batch_size, seq_len, input_size)
+		# v = v.squeeze(1)  # Remove the time dimension
+		# v = self.v_layers(v)
 
 		return pi, v
 		# return state
@@ -205,10 +208,7 @@ if __name__ == '__main__':
 	env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery'))
 	n_actions = env.action_space.n
 	input_dims = np.array(env.observation_space.sample()).reshape((-1,1)).shape
-	global_actor_critic = ActorCritic(input_dims, n_actions)
-	for layer in global_actor_critic.children():
-		if hasattr(layer, 'out_features'):
-			print(layer.out_features)
+	global_actor_critic = ActorCritic([input_dims[0]], n_actions)
 	global_actor_critic.share_memory()
 	optim = SharedAdam(global_actor_critic.parameters(), lr=lr, betas=(0.92, 0.999))
 
