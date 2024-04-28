@@ -98,3 +98,7 @@ if __name__ == "__main__":
     plt.ylabel('Total Reward')
     plt.title('A2C Training Progress')
     plt.show()
+
+
+#https://www.youtube.com/watch?v=LawaN3BdI00
+#https://www.youtube.com/watch?v=OcIx_TBu90Q&t=0s
