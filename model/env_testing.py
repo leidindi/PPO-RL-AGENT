@@ -1,12 +1,15 @@
-import gymnasium
+import gymnasium as gym
 import random
 import numpy as np
 import os
 import pandas as pd
 from gymnasium.wrappers import FlattenObservation
 from gymnasium.spaces.utils import flatten_space
+from torchrl.envs.libs.gym import GymEnv
 
-env = gymnasium.make('gym_environment:gym_environment/SimpleBattery', predict=True, day_offset=0)
+env = gym.make('gym_environment:gym_environment/SimpleBattery', predict=True, day_offset=0)
+# env = GymEnv('gym_environment:gym_environment/SimpleBattery', predict=True, day_offset=0, device='cpu')
+
 print(env.observation_space.is_np_flattenable)
 print(env.observation_space.sample())
 # wrapped_env = FlattenObservation(env)
@@ -21,7 +24,7 @@ observation, info = env.reset()
 
 print("_______")
 count = 0
-length = 1
+length = 100
 for i in range(length):
     observation, reward, terminated, truncated, info = env.step(0)
     print(observation)

@@ -30,7 +30,7 @@ class ActorCritic(nn.Module):
 		self.gamma = gamma
 
 		# self.conv_layers = nn.Sequential(
-		# 	nn.Conv1d(in_channels=input_dims[0], out_channels=32, kernel_size=1),
+		# 	nn.Conv1d(in_channels=input_dims[1], out_channels=32, kernel_size=1),
 		# 	nn.ReLU(),
 		# 	nn.Conv1d(in_channels=32, out_channels=64, kernel_size=1),
 		# 	nn.ReLU(),
@@ -38,7 +38,11 @@ class ActorCritic(nn.Module):
 		# 	nn.ReLU(),
 		# )
 
-		# # Calculate the shape of the output from the convolutional layers
+		# https://stackoverflow.com/questions/58949680/using-lstms-to-predict-from-single-element-sequence
+		# https://stackoverflow.com/questions/61960385/using-lstm-stateful-for-passing-context-b-w-batches-may-be-some-error-in-contex
+		# https://stackoverflow.com/questions/58949680/using-lstms-to-predict-from-single-element-sequence
+  
+		# Calculate the shape of the output from the convolutional layers
 		# conv_output_size = self.get_conv_output_size(input_dims)
         
 		# self.lstm = nn.LSTM(input_size=conv_output_size, hidden_size=64, batch_first=True)
@@ -55,11 +59,14 @@ class ActorCritic(nn.Module):
 		# 	nn.Linear(128, 1)
 		# )
 
-		self.pi1 = nn.Linear(*input_dims, 128)  
-		self.pi2 = nn.Linear(128, 128)  
+		self.pi1 = nn.Linear(input_dims[0], 128)  
+		self.pi2 = nn.Linear(128, 256)  
+		self.pi3 = nn.Linear(256, 256)  
+		self.pi4 = nn.Linear(256, 128)  
 		self.pi = nn.Linear(128, n_actions)
 
-		self.v1 = nn.Linear(*input_dims, 128)
+		self.v1 = nn.Linear(input_dims[0], 128)
+		self.v2 = nn.Linear(128, 128)
 		self.v = nn.Linear(128, 1)
 
 		self.rewards = []
@@ -78,11 +85,14 @@ class ActorCritic(nn.Module):
 
 	def forward(self, state):
 		pi1 = F.relu(self.pi1(state))
-		pi2 = F.tanh(self.pi2(pi1))
+		pi2 = F.relu(self.pi2(pi1))
+		pi3 = F.relu(self.pi3(pi2))
+		pi4 = F.relu(self.pi4(pi3))
 		v1 = F.relu(self.v1(state))
+		v2 = F.relu(self.v2(v1))
 
-		pi = self.pi(pi2.squeeze(1))
-		v = self.v(v1.squeeze(1))
+		pi = self.pi(pi4.squeeze(1))
+		v = self.v(v2.squeeze(1))
 		# state = state.unsqueeze(2)
 	
 		# for layer in self.conv_layers:
@@ -127,11 +137,11 @@ class ActorCritic(nn.Module):
 		states = T.tensor(self.states, dtype=T.float32)
 		actions = T.tensor(self.actions, dtype=T.float32)
 
+
 		returns = self.calc_R(done)
 
 		pi, values = self.forward(states)
 		values = values.squeeze()
-
 		critic_loss = (returns - values)**2
 
 		probs = T.softmax(pi, dim=1)
@@ -153,8 +163,9 @@ class ActorCritic(nn.Module):
 	
 	def get_conv_output_size(self, shape):
 		batch_size = 1
-		input = T.autograd.Variable(T.rand(batch_size, *shape))
-		output_feat = self.conv_layers(input)
+		inp = T.autograd.Variable(T.rand(batch_size, shape[1], shape[0]))
+		output_feat = self.conv_layers(inp)
+		print(output_feat.shape)
 		conv_output_size = output_feat.data.view(batch_size, -1).size(1)
 
 		return conv_output_size
@@ -169,7 +180,7 @@ class Agent(mp.Process):
 		self.name = 'w%02i' % name
 		self.episode_idx = global_ep_idx
 		# self.env = gym.make(env_id)
-		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=1, predict=True, day_offset=0, charge_penalty_mwh=8.0))
+		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=1, predict=True, day_offset=0, charge_penalty_mwh=0.0))
 		self.optimizer = optimizer
 
 	def run(self):
@@ -197,10 +208,10 @@ class Agent(mp.Process):
 				observation = observation_
 			with self.episode_idx.get_lock():
 				self.episode_idx.value += 1
-			print(self.name, 'episode ', self.episode_idx.value, 'reward %.1f' % score)
+			print(self.name, 'episode ', self.episode_idx.value, 'reward %.1f' % score, 'loss ', loss.item())
 
-N_GAMES = 600
-T_MAX = 15
+N_GAMES = 100
+T_MAX = 300
 
 if __name__ == '__main__':
 	lr = 1e-4
@@ -208,7 +219,7 @@ if __name__ == '__main__':
 	env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery'))
 	n_actions = env.action_space.n
 	input_dims = np.array(env.observation_space.sample()).reshape((-1,1)).shape
-	global_actor_critic = ActorCritic([input_dims[0]], n_actions)
+	global_actor_critic = ActorCritic(input_dims, n_actions)
 	global_actor_critic.share_memory()
 	optim = SharedAdam(global_actor_critic.parameters(), lr=lr, betas=(0.92, 0.999))
 
@@ -222,7 +233,7 @@ if __name__ == '__main__':
 						lr=lr,
 						name=i,
 						global_ep_idx=global_ep,
-						env_id=env_id) for i in range(mp.cpu_count() - 2)]
+						env_id=env_id) for i in range(1)]
 	# range(mp.cpu_count() - 2)
 	
 	[w.start() for w in workers]

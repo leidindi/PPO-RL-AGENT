@@ -24,10 +24,10 @@ class SimpleBatteryEnv(gym.Env):
         # mag naar 500
 
         # Battery Capacity in kWh
-        self.capacity = 6000.0
+        self.capacity = 2000.0
 
         # Charge rate in kilo Watt per hour = kWh
-        self.charge_rate = 600.0
+        self.charge_rate = 1000.0
 
         # Euro per mwh
         self.charge_penalty_mwh = charge_penalty_mwh
@@ -59,8 +59,9 @@ class SimpleBatteryEnv(gym.Env):
                 "energy_take_price": spaces.Box(low=energy_take_min, high=energy_take_max, shape=(1,), dtype=float),
                 "energy_feed_price": spaces.Box(low=energy_feed_min, high=energy_feed_max, shape=(1,), dtype=float),
                 # "regulation_state": spaces.Discrete(4, start=-1),
-                "day_of_year": spaces.Discrete(366, start=1),
-                "hour_of_day": spaces.Discrete(24),
+                "month": spaces.Box(low=0, high=11, shape=(1,), dtype=int),
+                "day_of_week": spaces.Box(low=0, high=6, shape=(1,), dtype=int),
+                "hour_of_day": spaces.Box(low=0, high=23, shape=(1,), dtype=int),
             }
         )
 
@@ -153,8 +154,9 @@ class SimpleBatteryEnv(gym.Env):
         self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
         self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
         # self.current_state['regulation_state'] = np.int64(reg_state)
-        self.current_state['day_of_year'] = np.int64(self.imb['day_of_year'][i])
-        self.current_state['hour_of_day'] = np.int64(self.imb['hour_of_day'][i])
+        self.current_state['month'] = np.array([self.imb['month'][i]], dtype=int)
+        self.current_state['day_of_week'] = np.array([self.imb['day_of_week'][i]], dtype=int)
+        self.current_state['hour_of_day'] = np.array([self.imb['hour_of_day'][i]], dtype=int)
         return self.current_state
     
     # This method will generate the manhattan distance as extra information
