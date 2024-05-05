@@ -59,15 +59,33 @@ class ActorCritic(nn.Module):
 		# 	nn.Linear(128, 1)
 		# )
 
-		self.pi1 = nn.Linear(input_dims[0], 128)  
-		self.pi2 = nn.Linear(128, 256)  
-		self.pi3 = nn.Linear(256, 256)  
-		self.pi4 = nn.Linear(256, 128)  
-		self.pi = nn.Linear(128, n_actions)
+		# self.pi1 = nn.Linear(input_dims[0], 128)  
+		# self.pi2 = nn.Linear(128, 256)  
+		# self.pi3 = nn.Linear(256, 256)  
+		# self.pi4 = nn.Linear(256, 128)  
+		# self.pi = nn.Linear(128, n_actions)
 
-		self.v1 = nn.Linear(input_dims[0], 128)
-		self.v2 = nn.Linear(128, 128)
-		self.v = nn.Linear(128, 1)
+		# self.v1 = nn.Linear(input_dims[0], 128)
+		# self.v2 = nn.Linear(128, 128)
+		# self.v = nn.Linear(128, 1)
+	
+		""" Using the layers from: https://github.com/dgriff777/rl_a3c_pytorch/blob/master/model.py"""
+
+		self.hidden_size = 64
+		# self.covn1 = nn.Conv1d(input_dims[0], 32, 5, stride=1, padding=2)
+		# self.conv2 = nn.Conv1d(32, 32, 5, stride=1, padding=1)
+		# self.conv3 = nn.Conv1d(32, 64, 4, stride=1, padding=1)
+		# self.conv4 = nn.Conv1d(64, 64, 3, stride=1, padding=1)
+		self.lin1 = nn.Linear(input_dims, 32)
+		self.lin2 = nn.Linear(32, 32)
+		self.lin3 = nn.Linear(32, 64)
+		self.lin4 = nn.Linear(64, 64)
+
+		self.lstm = nn.LSTMCell(64, self.hidden_size)
+		self.critic_lin = nn.Linear(self.hidden_size, 1)
+		self.actor_lin = nn.Linear(self.hidden_size, n_actions)
+		
+		# Might need zero weight initialization
 
 		self.rewards = []
 		self.actions = []
@@ -83,16 +101,17 @@ class ActorCritic(nn.Module):
 		self.actions = []
 		self.rewards = []
 
-	def forward(self, state):
-		pi1 = F.relu(self.pi1(state))
-		pi2 = F.relu(self.pi2(pi1))
-		pi3 = F.relu(self.pi3(pi2))
-		pi4 = F.relu(self.pi4(pi3))
-		v1 = F.relu(self.v1(state))
-		v2 = F.relu(self.v2(v1))
+	def forward(self, state, hx, cx):
+		# pi1 = F.relu(self.pi1(state))
+		# pi2 = F.relu(self.pi2(pi1))
+		# pi3 = F.relu(self.pi3(pi2))
+		# pi4 = F.relu(self.pi4(pi3))
+		# v1 = F.relu(self.v1(state))
+		# v2 = F.relu(self.v2(v1))
 
-		pi = self.pi(pi4.squeeze(1))
-		v = self.v(v2.squeeze(1))
+		# pi = self.pi(pi4.squeeze(1))
+		# v = self.v(v2.squeeze(1))
+		# return pi, v
 		# state = state.unsqueeze(2)
 	
 		# for layer in self.conv_layers:
@@ -111,16 +130,39 @@ class ActorCritic(nn.Module):
 		# v = v.squeeze(1)  # Remove the time dimension
 		# v = self.v_layers(v)
 
-		return pi, v
 		# return state
-  
-	def calc_R(self, done):
-		states = T.tensor(self.states, dtype=T.float32)
-		_, v = self.forward(states)
+		
+		""" Using the layers from: https://github.com/dgriff777/rl_a3c_pytorch/blob/master/model.py"""
 
+		# Apply relu and max pooling to cnn layers
+		# x = F.relu(F.max_pool2d(self.covn1(state), 2, 2))
+		# x = F.relu(F.max_pool2d(self.covn2(x), 2, 2))
+		# x = F.relu(F.max_pool2d(self.covn3(x), 2, 2))
+		# x = F.relu(F.max_pool2d(self.covn4(x), 2, 2))
+		x = F.relu(self.lin1(state))
+		x = F.relu(self.lin2(x))
+		x = F.relu(self.lin3(x))
+		x = F.relu(self.lin4(x))
+
+		# print(x.shape)
+		# x = x.view(x.size(0), -1) # Flatten the output for the RNN
+		# print(x.shape)
+
+		# May need to init hx and cx to zero for the initial state
+		if hx is not None and cx is not None:
+			hx, cx = self.lstm(x, (hx, cx))
+		else:
+			hx, cx = self.lstm(x)
+
+		x = hx
+
+		return self.actor_lin(x), self.critic_lin(x), hx, cx
+  
+	def calc_R(self, done, v):
 		# Self the reard to 0 if a terminal state is reached
 		R = v[-1]*(1-int(done))
 
+		print(v.shape)
 		# Calculate the batch returns in reverse
 		batch_return = []
 		for reward in self.rewards[::-1]:
@@ -133,14 +175,14 @@ class ActorCritic(nn.Module):
 
 		return batch_return
   
-	def calc_loss(self, done):
+	def calc_loss(self, done, hx, cx):
 		states = T.tensor(self.states, dtype=T.float32)
 		actions = T.tensor(self.actions, dtype=T.float32)
 
+		pi, values, hx, cx = self.forward(states, hx, cx)
 
-		returns = self.calc_R(done)
+		returns = self.calc_R(done, values)
 
-		pi, values = self.forward(states)
 		values = values.squeeze()
 		critic_loss = (returns - values)**2
 
@@ -150,11 +192,11 @@ class ActorCritic(nn.Module):
 		actor_loss = -log_probs*(returns-values)
 
 		total_loss = (critic_loss + actor_loss).mean()
-		return total_loss
+		return total_loss, hx, cx
 
-	def choose_action(self, observation):
-		state = T.tensor([observation], dtype=T.float32)
-		pi, _ = self.forward(state)
+	def choose_action(self, observation, hx, cx):
+		state = T.tensor(observation, dtype=T.float32).unsqueeze(0)
+		pi, _, _, _ = self.forward(state, hx, cx)
 		probs = T.softmax(pi, dim=1)
 		dist = Categorical(probs)
 		action = dist.sample().numpy()[0]
@@ -183,6 +225,10 @@ class Agent(mp.Process):
 		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=1, predict=True, day_offset=0, charge_penalty_mwh=0.0))
 		self.optimizer = optimizer
 
+		# Might need to init
+		self.hx = None
+		self.cx = None
+
 	def run(self):
 		t_step = 1
 		while self.episode_idx.value < N_GAMES:
@@ -191,12 +237,12 @@ class Agent(mp.Process):
 			score = 0
 			self.local_actor_critic.clear_memory()
 			while not done:
-				action = self.local_actor_critic.choose_action(observation)
+				action = self.local_actor_critic.choose_action(observation, None, None)
 				observation_, reward, done, truncated, info = self.env.step(action) # Where observation_ = next_state
 				score += reward
 				self.local_actor_critic.remember(observation, action, reward)
 				if t_step % T_MAX == 0 or done:
-					loss = self.local_actor_critic.calc_loss(done)
+					loss, self.hx, self.cx = self.local_actor_critic.calc_loss(done, self.hx, self.cx)
 					self.optimizer.zero_grad()
 					loss.backward()
 					for local_param, global_param in zip(self.local_actor_critic.parameters(), self.global_actor_critic.parameters()):
@@ -211,15 +257,18 @@ class Agent(mp.Process):
 			print(self.name, 'episode ', self.episode_idx.value, 'reward %.1f' % score, 'loss ', loss.item())
 
 N_GAMES = 100
-T_MAX = 300
+T_MAX = 15
 
 if __name__ == '__main__':
 	lr = 1e-4
 	env_id = 'CartPole-v1'
 	env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery'))
 	n_actions = env.action_space.n
-	input_dims = np.array(env.observation_space.sample()).reshape((-1,1)).shape
-	global_actor_critic = ActorCritic(input_dims, n_actions)
+	input_dims = env.observation_space.shape
+	# test_env = gym.make('SpaceInvaders-v4')
+	# print(test_env.observation_space.shape)
+	# print(test_env.observation_space.sample())
+	global_actor_critic = ActorCritic(input_dims[0], n_actions)
 	global_actor_critic.share_memory()
 	optim = SharedAdam(global_actor_critic.parameters(), lr=lr, betas=(0.92, 0.999))
 
@@ -227,7 +276,7 @@ if __name__ == '__main__':
 
 	workers = [Agent(global_actor_critic, 
 						optim, 
-						input_dims,
+						input_dims[0],
 						n_actions,
 						gamma=0.99,
 						lr=lr,

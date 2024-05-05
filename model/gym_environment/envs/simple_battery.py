@@ -44,10 +44,13 @@ class SimpleBatteryEnv(gym.Env):
         # Max energy price
         energy_take_max = self.imb['imbalance_take_price'].max()
         energy_feed_max = self.imb['imbalance_feed_price'].max()
+        medium_price_max = self.imb['medium_price'].max()
 
         # Minimum energy price
         energy_take_min = self.imb['imbalance_take_price'].min()
         energy_feed_min = self.imb['imbalance_feed_price'].min()
+        medium_price_min = self.imb['medium_price'].min()
+
 
         # Observation sapce is the opservations made / information
         # Battery charge is in kilo Wh
@@ -58,6 +61,7 @@ class SimpleBatteryEnv(gym.Env):
                 "battery_charge": spaces.Box(low=self.capacity * 0.1, high=self.capacity * 0.9, shape=(1,), dtype=float),
                 "energy_take_price": spaces.Box(low=energy_take_min, high=energy_take_max, shape=(1,), dtype=float),
                 "energy_feed_price": spaces.Box(low=energy_feed_min, high=energy_feed_max, shape=(1,), dtype=float),
+                "medium_price": spaces.Box(low=medium_price_min, high=medium_price_max, shape=(1,), dtype=float),
                 # "regulation_state": spaces.Discrete(4, start=-1),
                 "month": spaces.Box(low=0, high=11, shape=(1,), dtype=int),
                 "day_of_week": spaces.Box(low=0, high=6, shape=(1,), dtype=int),
@@ -111,10 +115,6 @@ class SimpleBatteryEnv(gym.Env):
 
             return self.current_state
         elif reg_state == -1:
-            # if np.isnan(min_price) and self.best_take_price == float('inf'):
-            #     self.best_take_price = min(mid_price, self.best_take_price)
-            # elif not np.isnan(min_price):
-            #     self.best_take_price = min(min_price, self.best_take_price)
             if pd.isnull(low_take_price) and self.check_mid:
                 self.best_take_price = min(medium_price, self.best_take_price)
             elif not pd.isnull(low_take_price):
@@ -125,10 +125,6 @@ class SimpleBatteryEnv(gym.Env):
             self.best_feed_price = self.best_take_price
 
         elif reg_state == 1:
-            # if np.isnan(max_price) and self.best_feed_price == float('-inf'):
-            #     self.best_feed_price = max(mid_price, self.best_feed_price)
-            # elif not np.isnan(max_price):
-            #     self.best_feed_price = max(max_price, self.best_feed_price)
             if pd.isnull(high_feed_price) and self.check_mid:
                 self.best_feed_price = max(medium_price, self.best_feed_price)
             elif not pd.isnull(high_feed_price):
@@ -147,12 +143,11 @@ class SimpleBatteryEnv(gym.Env):
                 self.best_take_price = min(medium_price, self.best_take_price)
             else:
                 self.best_take_price = min(low_take_price, medium_price, self.best_take_price)
-            # self.best_take_price = min(low_feed_price, medium_price, self.best_take_price)
-            # self.best_feed_price = max(high_take_price, medium_price, self.best_feed_price)
 
         self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
         self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
         self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
+        self.current_state['medium_price'] = np.array([medium_price], dtype=float)
         # self.current_state['regulation_state'] = np.int64(reg_state)
         self.current_state['month'] = np.array([self.imb['month'][i]], dtype=int)
         self.current_state['day_of_week'] = np.array([self.imb['day_of_week'][i]], dtype=int)

@@ -5,7 +5,6 @@ import os
 import pandas as pd
 from gymnasium.wrappers import FlattenObservation
 from gymnasium.spaces.utils import flatten_space
-from torchrl.envs.libs.gym import GymEnv
 
 env = gym.make('gym_environment:gym_environment/SimpleBattery', predict=True, day_offset=0)
 # env = GymEnv('gym_environment:gym_environment/SimpleBattery', predict=True, day_offset=0, device='cpu')
@@ -33,12 +32,14 @@ for i in range(length):
     if (i+1) % 15 == 0:
         imbalance_take_price = info['imb']['imbalance_take_price']
         imbalance_feed_price = info['imb']['imbalance_feed_price']
+        medium_price = info['imb']['medium_price']
         calculated_take_price = info['current_state']['energy_take_price'][0]
         calculated_feed_price = info['current_state']['energy_feed_price'][0]
-        if imbalance_take_price != calculated_take_price or imbalance_feed_price != calculated_feed_price:
+        calc_medium_price = info['current_state']['medium_price'][0]
+        if medium_price != calc_medium_price:
             # print("___")
             # print("reg_stat:{}".format(info['imb']['imbalance_regulation_state']))
-            # print("Date:{} Time:{}".format(info['imb']['date'], info['imb']['time']))
+            print("Date:{} Time:{}".format(info['imb']['date'], info['imb']['time']))
             # print("Info_feed:{} Info_take:{}".format(imbalance_feed_price, imbalance_take_price))
             # print("Obs_feed:{} Obs_take:{}".format(calculated_feed_price, calculated_take_price))
             count+=1
