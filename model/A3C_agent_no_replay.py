@@ -250,10 +250,10 @@ if __name__ == '__main__':
 
 	# Hyperparamters
 	hyper_params = {
-		'lr' : 1e-4, # learning rate (-4)
-		'gamma' : 0.99, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
-		'gamma_coef' : 0.92, # lambda(tau) -> affects the actor_loss
-		'ent_coef' : 0.4, # exploration (0.02) -> affects the actor loss
+		'lr' : 1e-5, # learning rate (-4)
+		'gamma' : 0.8, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
+		'gamma_coef' : 0.9, # lambda(tau 0.8) -> affects the actor_loss
+		'ent_coef' : 0.02, # exploration (0.02) -> affects the actor loss
 		'hidden_size' : 256, # LSTM Cells (128 1 day) (256 7 days)
 		'charge_pen' : 0.0, # cycles reduction
 		'days' : 1, # lengths of training data
@@ -283,6 +283,7 @@ if __name__ == '__main__':
 
 		try:
 			for hyper_params in hyper_dicts:
+				print("Tuning for {} hyper paramters".format(len(hyper_dicts)))
 				print("Now training with: {}".format(hyper_params))
 				global_actor_critic = ActorCritic(input_dims[0], n_actions, hyper_params['hidden_size'])
 				global_actor_critic.share_memory()
@@ -347,6 +348,7 @@ if __name__ == '__main__':
 			print('Total Training time: {} minutes with {} workers EP/s {}'.format(round(total_time/60, 2), total_workers, episodes_s))
 	else:
 		try:
+			print("No tuning")
 			print("Now training with: {}".format(hyper_params))
 			global_actor_critic = ActorCritic(input_dims[0], n_actions, hyper_params['hidden_size'])
 			global_actor_critic.share_memory()
