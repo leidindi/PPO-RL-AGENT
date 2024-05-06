@@ -200,7 +200,7 @@ class Agent(mp.Process):
 			except KeyboardInterrupt:
 				print("KeyboardInterrupt exception is caught")
 
-N_GAMES = 5000
+N_GAMES = 2800
 SEED = 1234
 T_STEP = 1440 * 1
 
@@ -257,7 +257,7 @@ if __name__ == '__main__':
 		'hidden_size' : 256, # LSTM Cells (128 1 day) (256 7 days)
 		'charge_pen' : 0.0, # cycles reduction
 		'days' : 7, # lengths of training data
-		'day_offset' : 120, # offset in the training data
+		'day_offset' : 238, # offset in the training data
 		'T_STEP': T_STEP, # after how many steps to do one optimizer step
 	}
  
@@ -291,7 +291,7 @@ if __name__ == '__main__':
 
 				score_avg = mp.Array('d', range(10))
 				global_ep = mp.Value('i', 0)
-				high_score = mp.Value('i', 3000)
+				high_score = mp.Value('i', 6000)
 				stop_event = mp.Event()
 				start_time = time.time()
 
