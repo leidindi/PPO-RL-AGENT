@@ -251,13 +251,13 @@ if __name__ == '__main__':
 	# Hyperparamters
 	hyper_params = {
 		'lr' : 1e-5, # learning rate (-4)
-		'gamma' : 0.8, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
+		'gamma' : 0.9, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
 		'gamma_coef' : 0.9, # lambda(tau 0.8) -> affects the actor_loss
 		'ent_coef' : 0.02, # exploration (0.02) -> affects the actor loss
-		'hidden_size' : 256, # LSTM Cells (128 1 day) (256 7 days)
-		'charge_pen' : 0.0, # cycles reduction
-		'days' : 7, # lengths of training data
-		'day_offset' : 238, # offset in the training data
+		'hidden_size' : 128, # LSTM Cells (128 1 day) (256 7 days)
+		'charge_pen' : 20.0, # cycles reduction
+		'days' : 1, # lengths of training data
+		'day_offset' : 0, # offset in the training data
 		'T_STEP': T_STEP, # after how many steps to do one optimizer step
 	}
  
