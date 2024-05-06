@@ -23,9 +23,9 @@ observation, info = env.reset()
 
 print("_______")
 count = 0
-length = 20
+length = 1440
 for i in range(length):
-    observation, reward, terminated, truncated, info = env.step(0)
+    observation, reward, terminated, truncated, info = env.step(2)
     # print(observation)
     if i % 100000 == 0:
         print(i)
@@ -36,6 +36,8 @@ for i in range(length):
         calculated_take_price = observation[3]
         calculated_feed_price = observation[2]
         calc_medium_price = observation[5]
+        print(observation[0])
+        print(reward)
         if medium_price != calc_medium_price:
             # print("___")
             # print("reg_stat:{}".format(info['imb']['imbalance_regulation_state']))
