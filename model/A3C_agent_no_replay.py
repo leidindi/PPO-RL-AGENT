@@ -90,7 +90,8 @@ class ActorCritic(nn.Module):
 
 
 class Agent(mp.Process):
-	def __init__(self, global_actor_critic, optimizer, input_dims, n_actions, name, global_ep_idx, score_avg, high_score, hyper_params, stop_event):
+	def __init__(self, global_actor_critic, optimizer, input_dims, n_actions, name, global_ep_idx, 
+							score_avg, high_score, hyper_params, stop_event):
 
 		super(Agent, self).__init__()
 		# Setting seed
@@ -119,8 +120,9 @@ class Agent(mp.Process):
 		self.score_avg = score_avg
 		self.high_score = high_score
 		# self.env = gym.make(env_id)
-		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=self.hyper_params['days'], predict=True
-																				 , day_offset=self.hyper_params['day_offset'], charge_penalty_mwh=self.hyper_params['charge_pen']))
+		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=self.hyper_params['days'], 
+																				 predict=self.hyper_params['Randomize'], day_offset=self.hyper_params['day_offset'], 
+																				 charge_penalty_mwh=self.hyper_params['charge_pen']))
 		self.optimizer = optimizer
 
 	def clear_memory(self):
@@ -214,7 +216,8 @@ class Agent(mp.Process):
 						with self.high_score.get_lock():
 							self.high_score.value = last_10_avg
 						self.global_actor_critic.save_model(self.episode_idx.value, self.hyper_params, round(last_10_avg))
-					print(self.name, '\t episode ', self.episode_idx.value, '\t reward %.1f' % score, '\t loss %.1f' % total_loss, '\t average %.1f' % last_10_avg)
+					print(self.name, '\t episode ', self.episode_idx.value, '\t reward %.1f' % score, '\t loss %.1f' % total_loss,
+					  '\t average %.1f' % last_10_avg)
 			except KeyboardInterrupt:
 				print("KeyboardInterrupt exception is caught")
 
@@ -233,7 +236,9 @@ def load_hyper_dict():
 	return json_list
 
 
-def create_permutations(lr_range, gamma_range, gamma_coef_range, ent_coef_range, hidden_size_range, charge_pen_range, days_range, days_offset_range, T_STEP_range):
+def create_permutations(lr_range, gamma_range, gamma_coef_range, ent_coef_range, hidden_size_range, 
+												charge_pen_range, days_range, days_offset_range, T_STEP_range, randomize):
+	
 	permutations = list(itertools.product(lr_range, gamma_range, gamma_coef_range, 
 																			 ent_coef_range, hidden_size_range, charge_pen_range, 
 																			 days_range, days_offset_range, T_STEP_range))
@@ -248,7 +253,8 @@ def create_permutations(lr_range, gamma_range, gamma_coef_range, ent_coef_range,
 		'charge_pen' : perm[5],
 		'days' : perm[6], 
 		'day_offset' : perm[7], 
-		'T_STEP': perm[8], 
+		'T_STEP': perm[8],
+		'Randomize': randomize,
 		}
 		hyper_dicts.append(hyper_dict)
 
@@ -267,15 +273,16 @@ if __name__ == '__main__':
 
 	# Hyperparamters
 	hyper_params = {
-		'lr' : 1e-5, # learning rate (-4)
-		'gamma' : 0.9, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
+		'lr' : 1e-4, # learning rate (-4)
+		'gamma' : 0.99, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
 		'gamma_coef' : 0.9, # lambda(tau 0.8) -> affects the actor_loss
 		'ent_coef' : 0.02, # exploration (0.02) -> affects the actor loss
-		'hidden_size' : 128, # LSTM Cells (128 1 day) (256 7 days)
-		'charge_pen' : 20.0, # cycles reduction
+		'hidden_size' : 256, # LSTM Cells (128 1 day) (256 7 days)
+		'charge_pen' : 0.0, # cycles reduction
 		'days' : 1, # lengths of training data
-		'day_offset' : 0, # offset in the training data
+		'day_offset' : 20, # offset in the training data
 		'T_STEP': 1440 * 1, # after how many steps to do one optimizer step
+		'Randomize': True,
 	}
  
 	tune = False
@@ -367,9 +374,12 @@ if __name__ == '__main__':
 			print("No tuning")
 			print("Now training with: {}".format(hyper_params))
 			global_actor_critic = ActorCritic(input_dims[0], n_actions, hyper_params['hidden_size'])
-			cur_path = os.path.dirname(os.path.realpath(__file__))
-			state_path = os.path.join(cur_path, './models/A3C/A3C_525score_1593ep_1days0_20.0pen.pt')
-			global_actor_critic.load_state_dict(T.load(state_path))
+
+			# Load previous state
+			# cur_path = os.path.dirname(os.path.realpath(__file__))
+			# state_path = os.path.join(cur_path, './models/A3C/A3C_525score_1593ep_1days0_20.0pen.pt')
+			# global_actor_critic.load_state_dict(T.load(state_path))
+
 			global_actor_critic.share_memory()
 			optim = SharedAdam(global_actor_critic.parameters(), lr=hyper_params['lr'], betas=(0.92, 0.999))
 

@@ -62,7 +62,7 @@ class SimpleBatteryEnv(gym.Env):
                 "energy_feed_price": spaces.Box(low=energy_feed_min, high=energy_feed_max, shape=(1,), dtype=float),
                 "mid_price": spaces.Box(low=mid_price_min, high=mid_price_max, shape=(1,), dtype=float),
                 # "regulation_state": spaces.Discrete(4, start=-1),
-                "month": spaces.Box(low=0, high=11, shape=(1,), dtype=int),
+                "month": spaces.Box(low=1, high=12, shape=(1,), dtype=int),
                 "day_of_week": spaces.Box(low=0, high=6, shape=(1,), dtype=int),
                 "hour_of_day": spaces.Box(low=0, high=23, shape=(1,), dtype=int),
             }
@@ -86,6 +86,8 @@ class SimpleBatteryEnv(gym.Env):
         self.best_feed_price = 0
         self.best_take_price = 0
         self.check_mid = True
+        
+        self.imbalance_reward = 0
 
         # Action space encoded by Discrete numbers
         # "charge" "discharge" "nothing"
@@ -165,7 +167,10 @@ class SimpleBatteryEnv(gym.Env):
         charged = False
         if self.battery_change != 0:
             charged = True
-        return {'imb': self.imb.iloc[self.count+self.start_minute], "current_state": self.current_state, "charged": charged}
+        return {'imb': self.imb.iloc[self.count+self.start_minute],
+                 "current_state": self.current_state,
+                  "imbalance_reward": self.imbalance_reward, 
+                  "soc_change": charged,}
         
     # how many kW charged in the last minute
     def _get_charged_minute(self, charge_per_minute):
@@ -177,19 +182,41 @@ class SimpleBatteryEnv(gym.Env):
             return charge_per_minute
 
     def _get_reward(self, charge_per_minute):
+
+        # TODO: Probbly somehing along the lines of: 
+        # - Have observation be take - mid price
+        # - Penalty will be automatic as reward will be take + mid and feed - mid
+        # - Add a penalty to doing actions when the SOC cannot change probably -1
         take_price = self.current_state['energy_take_price'][0]
         feed_price = self.current_state['energy_feed_price'][0]
 
+        imbalance_take = self.imb.iloc[self.count+self.start_minute]['imbalance_take_price']
+        imbalance_feed = self.imb.iloc[self.count+self.start_minute]['imbalance_feed_price']
+
+        threshold = self.current_state['mid_price'][0]
+        penality = 0
+        imbalance_price = 0
+
         if charge_per_minute > 0:
+            if take_price - threshold > -5:
+                penality = threshold / 1000.0
+
+            imbalance_price = imbalance_take / 1000.0
             price_per_kW = take_price / 1000.0
         elif charge_per_minute < 0:
+            if feed_price - threshold < 60:
+                penality = threshold / 1000.0
+
+            imbalance_price = imbalance_feed / 1000.0
             price_per_kW = feed_price / 1000.0
         else:
             price_per_kW = 0
 
-        reward_per_minute = -(charge_per_minute * price_per_kW) # - (self.charge_penalty_kwh * np.abs(self.charge_per_minute))
 
-        return reward_per_minute
+        self.imbalance_reward = -(charge_per_minute * imbalance_price)
+        reward_per_minute =  -(charge_per_minute * price_per_kW) # - (self.charge_penalty_kwh * np.abs(self.charge_per_minute))
+        final_reward = reward_per_minute - penality
+        return final_reward
     
     """
     Reset is called to create a new episode
