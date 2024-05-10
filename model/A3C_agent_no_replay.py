@@ -113,7 +113,7 @@ class Agent(mp.Process):
 		self.score_avg = score_avg
 		self.high_score = high_score
 		# self.env = gym.make(env_id)
-		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=self.hyper_params['days'], predict=True
+		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=self.hyper_params['days'], predict=False
 																				 , day_offset=self.hyper_params['day_offset'], charge_penalty_mwh=self.hyper_params['charge_pen']))
 		self.optimizer = optimizer
 
@@ -200,7 +200,7 @@ class Agent(mp.Process):
 			except KeyboardInterrupt:
 				print("KeyboardInterrupt exception is caught")
 
-N_GAMES = 2800
+N_GAMES = 6000
 SEED = 1234
 T_STEP = 1440 * 1
 
@@ -254,8 +254,8 @@ if __name__ == '__main__':
 		'gamma' : 0.9, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
 		'gamma_coef' : 0.9, # lambda(tau 0.8) -> affects the actor_loss
 		'ent_coef' : 0.02, # exploration (0.02) -> affects the actor loss
-		'hidden_size' : 128, # LSTM Cells (128 1 day) (256 7 days)
-		'charge_pen' : 20.0, # cycles reduction
+		'hidden_size' : 256, # LSTM Cells (128 1 day) (256 7 days)
+		'charge_pen' : 30.0, # cycles reduction
 		'days' : 1, # lengths of training data
 		'day_offset' : 0, # offset in the training data
 		'T_STEP': T_STEP, # after how many steps to do one optimizer step
@@ -377,6 +377,7 @@ if __name__ == '__main__':
 			for w in workers:
 				time.sleep(0.001)
 				w.join()
+			global_actor_critic.save_model(global_ep.value, hyper_params, round(np.mean(score_avg[:])))
 		except:
 			global_actor_critic.save_model(global_ep.value, hyper_params, round(np.mean(score_avg[:])))
 			end_time = time.time()

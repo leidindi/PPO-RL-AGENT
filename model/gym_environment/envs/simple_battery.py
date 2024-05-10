@@ -63,7 +63,7 @@ class SimpleBatteryEnv(gym.Env):
                 "energy_feed_price": spaces.Box(low=energy_feed_min, high=energy_feed_max, shape=(1,), dtype=float),
                 "mid_price": spaces.Box(low=mid_price_min, high=mid_price_max, shape=(1,), dtype=float),
                 # "regulation_state": spaces.Discrete(4, start=-1),
-                "month": spaces.Box(low=0, high=11, shape=(1,), dtype=int),
+                "month": spaces.Box(low=1, high=12, shape=(1,), dtype=int),
                 "day_of_week": spaces.Box(low=0, high=6, shape=(1,), dtype=int),
                 "hour_of_day": spaces.Box(low=0, high=23, shape=(1,), dtype=int),
             }
@@ -181,11 +181,12 @@ class SimpleBatteryEnv(gym.Env):
     def _get_reward(self, charge_per_minute):
         take_price = self.current_state['energy_take_price'][0]
         feed_price = self.current_state['energy_feed_price'][0]
+        mid_price = self.current_state['mid_price'][0]
 
         if charge_per_minute > 0:
-            price_per_kW = take_price / 1000.0
+            price_per_kW = (take_price-mid_price) / 1000.0
         elif charge_per_minute < 0:
-            price_per_kW = feed_price / 1000.0
+            price_per_kW = (feed_price-mid_price) / 1000.0
         else:
             price_per_kW = 0
 
