@@ -6,22 +6,21 @@ import math
 import gymnasium as gym
 from gymnasium import spaces
 
-# Load data
-cur_path = os.path.dirname(os.path.realpath(__file__))
-data_path = os.path.join(cur_path, "../../data/backend/2023/train_imb.csv")
-imb = pd.read_csv(data_path)
-
-
 class SimpleBatteryEnv(gym.Env):
     metadata = {"render_modes": ['human', 'rgb_array']}
 
-    def __init__(self, days=1, predict=False, day_offset=0, charge_penalty_mwh=8.0, seed=None):
+    def __init__(self, days=1, predict=False, day_offset=0, charge_penalty_mwh=8.0, year=2023, seed=None):
         super().reset(seed=seed)
         super(SimpleBatteryEnv, self).__init__()
 
         # TODO: max amount of cycles per year\
         # aangehouden in baseline is 350
         # mag naar 500
+
+        # Load data
+        cur_path = os.path.dirname(os.path.realpath(__file__))
+        data_path = os.path.join(cur_path, "../../data/backend/{}/train_imb.csv".format(year))
+        imb = pd.read_csv(data_path)
 
         # Battery Capacity in kWh
         self.capacity = 2000.0
@@ -69,11 +68,10 @@ class SimpleBatteryEnv(gym.Env):
             }
         )
 
-        # Charge, Discharge, Nothing
         self._action_to_charge = {
-            0 : self.charge_per_minute,
-            1 : -self.charge_per_minute,
-            2 : 0
+            0 : self.charge_per_minute, # Charge / Take
+            1 : -self.charge_per_minute, # Discharge / Feed
+            2 : 0 # Nothing
         }
 
         self.count = 0
@@ -88,6 +86,8 @@ class SimpleBatteryEnv(gym.Env):
         self.best_feed_price = 0
         self.best_take_price = 0
         self.check_mid = True
+        
+        self.imbalance_reward = 0
 
         # Action space encoded by Discrete numbers
         # "charge" "discharge" "nothing"
@@ -111,15 +111,9 @@ class SimpleBatteryEnv(gym.Env):
 
 
         if reg_state == 0:
-            self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
             self.current_state['energy_take_price'] = np.array([mid_price], dtype=float)
             self.current_state['energy_feed_price'] = np.array([mid_price], dtype=float)
-            self.current_state['mid_price'] = np.array([mid_price], dtype=float)
-            self.current_state['month'] = np.array([row['month']], dtype=int)
-            self.current_state['day_of_week'] = np.array([row['day_of_week']], dtype=int)
-            self.current_state['hour_of_day'] = np.array([row['hour_of_day']], dtype=int)
 
-            return self.current_state
         elif reg_state == -1:
             if pd.isnull(low_take_price) and self.check_mid:
                 self.best_take_price = min(mid_price, self.best_take_price)
@@ -129,6 +123,9 @@ class SimpleBatteryEnv(gym.Env):
                 self.best_take_price = min(low_take_price, self.best_take_price)
                 self.check_mid = False
             self.best_feed_price = self.best_take_price
+
+            self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
+            self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
 
         elif reg_state == 1:
             if pd.isnull(high_feed_price) and self.check_mid:
@@ -140,6 +137,9 @@ class SimpleBatteryEnv(gym.Env):
                 self.check_mid = False
             self.best_take_price = self.best_feed_price
 
+            self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
+            self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
+
         elif reg_state == 2:
             if np.isnan(high_feed_price):
                 self.best_feed_price = max(mid_price, self.best_feed_price)
@@ -149,12 +149,12 @@ class SimpleBatteryEnv(gym.Env):
                 self.best_take_price = min(mid_price, self.best_take_price)
             else:
                 self.best_take_price = min(low_take_price, mid_price, self.best_take_price)
+            
+            self.current_state['energy_take_price'] = np.array([self.best_feed_price], dtype=float)
+            self.current_state['energy_feed_price'] = np.array([self.best_take_price], dtype=float)
 
         self.current_state['battery_charge'] = np.array([self._battery_charge], dtype=float)
-        self.current_state['energy_take_price'] = np.array([self.best_take_price], dtype=float)
-        self.current_state['energy_feed_price'] = np.array([self.best_feed_price], dtype=float)
         self.current_state['mid_price'] = np.array([mid_price], dtype=float)
-        # self.current_state['regulation_state'] = np.int64(reg_state)
         self.current_state['month'] = np.array([row['month']], dtype=int)
         self.current_state['day_of_week'] = np.array([row['day_of_week']], dtype=int)
         self.current_state['hour_of_day'] = np.array([row['hour_of_day']], dtype=int)
@@ -167,7 +167,10 @@ class SimpleBatteryEnv(gym.Env):
         charged = False
         if self.battery_change != 0:
             charged = True
-        return {'imb': self.imb.iloc[self.count+self.start_minute], "current_state": self.current_state, "charged": charged}
+        return {'imb': self.imb.iloc[self.count+self.start_minute],
+                 "current_state": self.current_state,
+                  "imbalance_reward": self.imbalance_reward, 
+                  "soc_change": charged,}
         
     # how many kW charged in the last minute
     def _get_charged_minute(self, charge_per_minute):
@@ -179,9 +182,21 @@ class SimpleBatteryEnv(gym.Env):
             return charge_per_minute
 
     def _get_reward(self, charge_per_minute):
+
+        # TODO: Probbly somehing along the lines of: 
+        # - Have observation be take - mid price
+        # - Penalty will be automatic as reward will be take + mid and feed - mid
+        # - Add a penalty to doing actions when the SOC cannot change probably -1
         take_price = self.current_state['energy_take_price'][0]
         feed_price = self.current_state['energy_feed_price'][0]
         mid_price = self.current_state['mid_price'][0]
+
+        imbalance_take = self.imb.iloc[self.count+self.start_minute]['imbalance_take_price']
+        imbalance_feed = self.imb.iloc[self.count+self.start_minute]['imbalance_feed_price']
+
+        threshold = self.current_state['mid_price'][0]
+        penality = 0
+        imbalance_price = 0
 
         if charge_per_minute > 0:
             price_per_kW = (take_price-mid_price) / 1000.0
@@ -190,9 +205,11 @@ class SimpleBatteryEnv(gym.Env):
         else:
             price_per_kW = 0
 
-        reward_per_minute = -(charge_per_minute * price_per_kW) - (self.charge_penalty_kwh * np.abs(self.charge_per_minute))
 
-        return reward_per_minute
+        self.imbalance_reward = -(charge_per_minute * imbalance_price)
+        reward_per_minute =  -(charge_per_minute * price_per_kW) - (self.charge_penalty_kwh * np.abs(self.charge_per_minute))
+        final_reward = reward_per_minute - penality
+        return final_reward
     
     """
     Reset is called to create a new episode

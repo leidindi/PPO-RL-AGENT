@@ -90,7 +90,8 @@ class ActorCritic(nn.Module):
 
 
 class Agent(mp.Process):
-	def __init__(self, global_actor_critic, optimizer, input_dims, n_actions, name, global_ep_idx, score_avg, high_score, hyper_params, stop_event):
+	def __init__(self, global_actor_critic, optimizer, input_dims, n_actions, name, global_ep_idx, 
+							score_avg, high_score, hyper_params, stop_event):
 
 		super(Agent, self).__init__()
 		# Setting seed
@@ -105,18 +106,30 @@ class Agent(mp.Process):
 		self.gamma_coef = self.hyper_params['gamma_coef']
 		self.ent_coef = self.hyper_params['ent_coef']
 
+		# Memory
+		self.values = []
+		self.log_probs = []
+		self.entropies = []
+		self.rewards = []
 
 		self.local_actor_critic = ActorCritic(input_dims, n_actions, self.hidden_size, self.gamma)
 		self.global_actor_critic = global_actor_critic
+
 		self.name = 'w%02i' % name
 		self.episode_idx = global_ep_idx
 		self.score_avg = score_avg
 		self.high_score = high_score
 		# self.env = gym.make(env_id)
-		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=self.hyper_params['days'], predict=False
-																				 , day_offset=self.hyper_params['day_offset'], charge_penalty_mwh=self.hyper_params['charge_pen']))
+		self.env = FlattenObservation(gym.make('gym_environment:gym_environment/SimpleBattery', days=self.hyper_params['days'], 
+																				 predict=self.hyper_params['Randomize'], day_offset=self.hyper_params['day_offset'], 
+																				 charge_penalty_mwh=self.hyper_params['charge_pen']))
 		self.optimizer = optimizer
 
+	def clear_memory(self):
+		self.values = []
+		self.log_probs = []
+		self.entropies = []
+		self.rewards = []
 
 	def run(self):
 			try:
@@ -130,21 +143,18 @@ class Agent(mp.Process):
 					self.local_actor_critic.load_state_dict(self.global_actor_critic.state_dict())
 					score = 0
 
-					values = []
-					log_probs = []
-					entropies = []
-					rewards = []
+					total_loss = 0
 
+					t_step = 0
 					while not done:
 						# TODO: """ Add T_STEP updates for longer time series"""
 						# t_step = 0
-						# while t_step > T_STEP:
 						pi, v, (self.hx, self.cx) = self.local_actor_critic(state.unsqueeze(0), self.hx, self.cx)
 
 						prob = F.softmax(pi, dim=1)
 						log_prob = F.log_softmax(pi, dim=1)
 						entropy =-(log_prob * prob).sum(1, keepdim=True)
-						entropies.append(entropy)
+						self.entropies.append(entropy)
 
 						action = prob.multinomial(num_samples=1).detach()
 						log_prob = log_prob.gather(1, action)
@@ -153,36 +163,46 @@ class Agent(mp.Process):
 						score += reward
 
 						state = T.tensor(next_state, dtype=T.float32)
-						values.append(v)
-						log_probs.append(log_prob)
-						rewards.append(reward)
+						self.values.append(v)
+						self.log_probs.append(log_prob)
+						self.rewards.append(reward)
 
-					R = T.zeros(1, 1)
-					values.append(R)
+						if t_step % self.hyper_params['T_STEP'] == 0:
+							if not done:
+								_, v, _ = self.local_actor_critic(state.unsqueeze(0), self.hx, self.cx)
+								R = v.detach()
+							else:
+								R = T.zeros(1, 1)
 
-					actor_loss = 0
-					critic_loss = 0
-					gae = T.zeros(1, 1)
-					for i in reversed(range(len(rewards))):
-						R = rewards[i] + self.gamma*R
-						advantage = R - values[i]
-						critic_loss = critic_loss + 0.5 * advantage.pow(2)
+							self.values.append(R)
+							gae = T.zeros(1, 1)
 
-						# Generalized Advantage Estimation
-						delta_t = rewards[i] + self.gamma * values[i + 1] - values[i]
-						gae = gae * self.gamma * self.gamma_coef + delta_t
+							actor_loss = 0
+							critic_loss = 0
 
-						actor_loss = actor_loss - log_probs[i] * gae.detach() - self.ent_coef * entropies[i]
+							for i in reversed(range(len(self.rewards))):
+								R = self.rewards[i] + self.gamma*R
+								advantage = R - self.values[i]
+								critic_loss = critic_loss + 0.5 * advantage.pow(2)
 
-					self.optimizer.zero_grad()
-					# loss = (critic_loss +  actor_loss).mean()
-					loss = (0.5 * critic_loss +  actor_loss)
-					loss.backward()
+								# Generalized Advantage Estimation
+								delta_t = self.rewards[i] + self.gamma * self.values[i + 1] - self.values[i]
+								gae = gae * self.gamma * self.gamma_coef + delta_t
 
-					ensure_shared_grads(self.local_actor_critic, self.global_actor_critic)
-					self.optimizer.step()
+								actor_loss = actor_loss - self.log_probs[i] * gae.detach() - self.ent_coef * self.entropies[i]
 
-					
+							self.optimizer.zero_grad()
+							# loss = (critic_loss +  actor_loss).mean()
+							loss = (0.5 * critic_loss +  actor_loss)
+							loss.backward()
+
+							ensure_shared_grads(self.local_actor_critic, self.global_actor_critic)
+							self.optimizer.step()
+							
+							total_loss += loss.item()
+							self.clear_memory()
+						t_step += 1
+
 					# Outside of T_STEP
 					with self.episode_idx.get_lock():
 						self.episode_idx.value += 1
@@ -196,13 +216,13 @@ class Agent(mp.Process):
 						with self.high_score.get_lock():
 							self.high_score.value = last_10_avg
 						self.global_actor_critic.save_model(self.episode_idx.value, self.hyper_params, round(last_10_avg))
-					print(self.name, '\t episode ', self.episode_idx.value, '\t reward %.1f' % score, '\t loss %.1f' % loss.item(), '\t average %.1f' % last_10_avg)
+					print(self.name, '\t episode ', self.episode_idx.value, '\t reward %.1f' % score, '\t loss %.1f' % total_loss,
+					  '\t average %.1f' % last_10_avg)
 			except KeyboardInterrupt:
 				print("KeyboardInterrupt exception is caught")
 
 N_GAMES = 6000
 SEED = 1234
-T_STEP = 1440 * 1
 
 def save_hyper_dict(hyper_dict):
 	with open('hyper_dict.json', 'w') as file:
@@ -216,7 +236,9 @@ def load_hyper_dict():
 	return json_list
 
 
-def create_permutations(lr_range, gamma_range, gamma_coef_range, ent_coef_range, hidden_size_range, charge_pen_range, days_range, days_offset_range, T_STEP_range):
+def create_permutations(lr_range, gamma_range, gamma_coef_range, ent_coef_range, hidden_size_range, 
+												charge_pen_range, days_range, days_offset_range, T_STEP_range, randomize):
+	
 	permutations = list(itertools.product(lr_range, gamma_range, gamma_coef_range, 
 																			 ent_coef_range, hidden_size_range, charge_pen_range, 
 																			 days_range, days_offset_range, T_STEP_range))
@@ -231,7 +253,8 @@ def create_permutations(lr_range, gamma_range, gamma_coef_range, ent_coef_range,
 		'charge_pen' : perm[5],
 		'days' : perm[6], 
 		'day_offset' : perm[7], 
-		'T_STEP': perm[8], 
+		'T_STEP': perm[8],
+		'Randomize': randomize,
 		}
 		hyper_dicts.append(hyper_dict)
 
@@ -250,15 +273,16 @@ if __name__ == '__main__':
 
 	# Hyperparamters
 	hyper_params = {
-		'lr' : 1e-5, # learning rate (-4)
-		'gamma' : 0.9, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
+		'lr' : 1e-4, # learning rate (-4)
+		'gamma' : 0.99, # future rewards (0.8) -> this means the loss will be higher (no loss = nothing to optimize)
 		'gamma_coef' : 0.9, # lambda(tau 0.8) -> affects the actor_loss
 		'ent_coef' : 0.02, # exploration (0.02) -> affects the actor loss
 		'hidden_size' : 256, # LSTM Cells (128 1 day) (256 7 days)
 		'charge_pen' : 30.0, # cycles reduction
 		'days' : 1, # lengths of training data
-		'day_offset' : 0, # offset in the training data
-		'T_STEP': T_STEP, # after how many steps to do one optimizer step
+		'day_offset' : 20, # offset in the training data
+		'T_STEP': 1440 * 1, # after how many steps to do one optimizer step
+		'Randomize': True,
 	}
  
 	tune = False
@@ -274,7 +298,7 @@ if __name__ == '__main__':
 												charge_pen_range=[0.0],
 												days_range=[7],
 												days_offset_range=[120],
-												T_STEP_range=[T_STEP]
+												T_STEP_range=[1440]
 												)
 		else:
 			hyper_dicts = load_hyper_dict()
@@ -298,7 +322,6 @@ if __name__ == '__main__':
 				# total_workers = mp.cpu_count() - 8
 				total_workers = 8
 				workers = []
-
 
 				for i in range(total_workers):
 					w = Agent(global_actor_critic, optim, input_dims[0], n_actions, name=i, global_ep_idx=global_ep, score_avg=score_avg, 
@@ -351,6 +374,12 @@ if __name__ == '__main__':
 			print("No tuning")
 			print("Now training with: {}".format(hyper_params))
 			global_actor_critic = ActorCritic(input_dims[0], n_actions, hyper_params['hidden_size'])
+
+			# Load previous state
+			# cur_path = os.path.dirname(os.path.realpath(__file__))
+			# state_path = os.path.join(cur_path, './models/A3C/A3C_525score_1593ep_1days0_20.0pen.pt')
+			# global_actor_critic.load_state_dict(T.load(state_path))
+
 			global_actor_critic.share_memory()
 			optim = SharedAdam(global_actor_critic.parameters(), lr=hyper_params['lr'], betas=(0.92, 0.999))
 
@@ -363,8 +392,7 @@ if __name__ == '__main__':
 			# total_workers = mp.cpu_count() - 8
 			total_workers = 8
 			workers = []
-
-
+			
 			for i in range(total_workers):
 				w = Agent(global_actor_critic, optim, input_dims[0], n_actions, name=i, global_ep_idx=global_ep, score_avg=score_avg, 
 							high_score=high_score, hyper_params=hyper_params, stop_event=stop_event)
@@ -383,5 +411,5 @@ if __name__ == '__main__':
 			end_time = time.time()
 			total_time = end_time - start_time
 			episodes_s = round(global_ep.value / total_time, 2)
-			print('Total Training time: {} minutes with {} workers EP/s {}'.format(round(total_time/60, 2), total_workers, episodes_s))
+			print('Total Training time:() {} minutes with {} workers EP/s {}'.format(round(total_time/60, 2), total_workers, episodes_s))
 			

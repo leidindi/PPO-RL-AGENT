@@ -1,0 +1,11 @@
+{
+    "lr": 1e-05,
+    "gamma": 0.9,
+    "gamma_coef": 0.9,
+    "ent_coef": 0.02,
+    "hidden_size": 128,
+    "charge_pen": 20.0,
+    "days": 7,
+    "day_offset": 0,
+    "T_STEP": 1440
+}
