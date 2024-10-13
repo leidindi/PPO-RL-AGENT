@@ -1,2 +1,0 @@
-from gym_environment.envs.grid_world import GridWorldEnv
-from gym_environment.envs.simple_battery import SimpleBatteryEnv
