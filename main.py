@@ -1,22 +1,31 @@
-import gym
+import gymnasium as gym
 import numpy as np
+import ppo_torch
 from ppo_torch import Agent
 from utils import plot_learning_curve
 
 if __name__ == '__main__':
-    env = gym.make('CartPole-v0')
-    N = 20
-    batch_size = 5
-    n_epochs = 4
-    alpha = 0.0003
-    agent = Agent(n_actions=env.action_space.n, batch_size=batch_size, 
+    env_name = "MountainCar-v0"
+    env = gym.make(env_name)
+    N = 64
+    batch_size = 32
+    n_epochs = 5
+    alpha = 0.0001
+    if env_name == "MountainCarContinuous-v0":
+        n_actions = 100
+    else:
+        n_actions = env.action_space.n
+    agent = Agent(n_actions=n_actions, batch_size=batch_size, 
                     alpha=alpha, n_epochs=n_epochs, 
                     input_dims=env.observation_space.shape)
-    n_games = 300
+    #agent.load_models()
+    agent.memory.clear_memory()
+    n_games = 100
+    agent.actor.train()
+    agent.critic.train()
+    figure_file = 'plots/'+env_name+'.png'
 
-    figure_file = 'plots/cartpole.png'
-
-    best_score = env.reward_range[0]
+    best_score = -200
     score_history = []
 
     learn_iters = 0
@@ -25,18 +34,36 @@ if __name__ == '__main__':
 
     for i in range(n_games):
         observation = env.reset()
+        if isinstance(observation, tuple):
+            observation = observation[0]
         done = False
         score = 0
+
+        steps = 0
         while not done:
+            steps += 1
             action, prob, val = agent.choose_action(observation)
-            observation_, reward, done, info = env.step(action)
+            if env_name == "MountainCarContinuous-v0":
+                action = np.array([(action-n_actions)/n_actions])
+            observation_, reward, done, info, _ = env.step(action)
             n_steps += 1
+            #print(observation_[0])
+            reward += np.abs(observation_[1])
+
+            if done:
+                print("It managed to finish")
+                reward += 500
+            
             score += reward
             agent.remember(observation, action, prob, val, reward, done)
+            
             if n_steps % N == 0:
                 agent.learn()
                 learn_iters += 1
+            if isinstance(observation_, tuple):
+                observation_ = observation_[0]
             observation = observation_
+            
         score_history.append(score)
         avg_score = np.mean(score_history[-100:])
 

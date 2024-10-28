@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import torch as T
+import torch as torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
@@ -24,12 +24,12 @@ class PPOMemory:
         batches = [indices[i:i+self.batch_size] for i in batch_start]
 
         return np.array(self.states),\
-                np.array(self.actions),\
-                np.array(self.probs),\
-                np.array(self.vals),\
-                np.array(self.rewards),\
-                np.array(self.dones),\
-                batches
+                    np.array(self.actions),\
+                        np.array(self.probs),\
+                            np.array(self.vals),\
+                                np.array(self.rewards),\
+                                    np.array(self.dones),\
+                                        batches
 
     def store_memory(self, state, action, probs, vals, reward, done):
         self.states.append(state)
@@ -49,34 +49,40 @@ class PPOMemory:
 
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, alpha,
-            fc1_dims=256, fc2_dims=256, chkpt_dir='tmp/ppo'):
+            fc1_dims=256, fc2_dims=256, chkpt_dir='tmp\\ppo'):
         super(ActorNetwork, self).__init__()
 
         self.checkpoint_file = os.path.join(chkpt_dir, 'actor_torch_ppo')
         self.actor = nn.Sequential(
-                nn.Linear(*input_dims, fc1_dims),
-                nn.ReLU(),
-                nn.Linear(fc1_dims, fc2_dims),
-                nn.ReLU(),
-                nn.Linear(fc2_dims, n_actions),
-                nn.Softmax(dim=-1)
+            nn.Linear(*input_dims, fc1_dims),
+            nn.LayerNorm(fc1_dims),  # Batch normalization after the first linear layer
+            nn.LeakyReLU(),
+            nn.Dropout(p=0.5),  # Dropout with 50% probability
+            nn.Linear(fc1_dims, fc2_dims),
+            nn.LayerNorm(fc2_dims),  # Batch normalization after the second linear layer
+            nn.LeakyReLU(),
+            nn.Dropout(p=0.5),  # Dropout with 50% probability
+            nn.Linear(fc2_dims, n_actions),
+            nn.Softmax(dim=-1)
         )
 
-        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-        self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha, weight_decay = (alpha*3)/10)
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.to(self.device)
 
     def forward(self, state):
+        assert state.shape != torch.Size([0]), "Error: torch tensor has an empty shape!"              
         dist = self.actor(state)
+        
         dist = Categorical(dist)
         
         return dist
 
     def save_checkpoint(self):
-        T.save(self.state_dict(), self.checkpoint_file)
+        torch.save(self.state_dict(), self.checkpoint_file)
 
     def load_checkpoint(self):
-        self.load_state_dict(T.load(self.checkpoint_file))
+        self.load_state_dict(torch.load(self.checkpoint_file))
 
 class CriticNetwork(nn.Module):
     def __init__(self, input_dims, alpha, fc1_dims=256, fc2_dims=256,
@@ -85,38 +91,43 @@ class CriticNetwork(nn.Module):
 
         self.checkpoint_file = os.path.join(chkpt_dir, 'critic_torch_ppo')
         self.critic = nn.Sequential(
-                nn.Linear(*input_dims, fc1_dims),
-                nn.ReLU(),
-                nn.Linear(fc1_dims, fc2_dims),
-                nn.ReLU(),
-                nn.Linear(fc2_dims, 1)
+            nn.Linear(*input_dims, fc1_dims),
+            nn.LayerNorm(fc1_dims),  # Batch normalization after the first linear layer
+            nn.LeakyReLU(),
+            nn.Dropout(p=0.2),  # Dropout with 50% probability
+            nn.Linear(fc1_dims, fc2_dims),
+            nn.LayerNorm(fc2_dims),  # Batch normalization after the second linear layer
+            nn.LeakyReLU(),
+            nn.Dropout(p=0.2),  # Dropout with 50% probability
+            nn.Linear(fc2_dims, 1)
         )
 
-        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-        self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha, weight_decay = (alpha*3)/10)
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.to(self.device)
 
     def forward(self, state):
+        assert state.shape != torch.Size([0]), "Error: torchhe tensor has an empty shape!"
         value = self.critic(state)
 
         return value
 
     def save_checkpoint(self):
-        T.save(self.state_dict(), self.checkpoint_file)
+        torch.save(self.state_dict(), self.checkpoint_file)
 
     def load_checkpoint(self):
-        self.load_state_dict(T.load(self.checkpoint_file))
+        self.load_state_dict(torch.load(self.checkpoint_file))
 
 class Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
-            policy_clip=0.2, batch_size=64, n_epochs=10):
+    def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.99,
+            policy_clip=0.2, batch_size=64, n_epochs=10,fc1_dims=256,fc2_dims=256):
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
         self.gae_lambda = gae_lambda
 
-        self.actor = ActorNetwork(n_actions, input_dims, alpha)
-        self.critic = CriticNetwork(input_dims, alpha)
+        self.actor = ActorNetwork(n_actions, input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims)
+        self.critic = CriticNetwork(input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims)
         self.memory = PPOMemory(batch_size)
        
     def remember(self, state, action, probs, vals, reward, done):
@@ -132,16 +143,28 @@ class Agent:
         self.actor.load_checkpoint()
         self.critic.load_checkpoint()
 
-    def choose_action(self, observation):
-        state = T.tensor([observation], dtype=T.float).to(self.actor.device)
+    def choose_action(self, observation, debug = False):
+        #debug state output
+        if debug:
+            print(f'observation before fix {observation}')
+            print(f'observation before fix {type(observation)}')
 
+        if isinstance(observation, tuple):
+            observation = observation[0]
+        
+        if debug:
+            print(f'observation after fix {observation}')   
+
+        observation = torch.tensor(np.array(observation), dtype=torch.float32)
+        state = observation.to(self.actor.device)
+        assert state.shape != torch.Size([0]), "Error: torchhe tensor has an empty shape!"
         dist = self.actor(state)
         value = self.critic(state)
         action = dist.sample()
 
-        probs = T.squeeze(dist.log_prob(action)).item()
-        action = T.squeeze(action).item()
-        value = T.squeeze(value).item()
+        probs = torch.squeeze(dist.log_prob(action)).item()
+        action = torch.squeeze(action).item()
+        value = torch.squeeze(value).item()
 
         return action, probs, value
 
@@ -162,26 +185,26 @@ class Agent:
                             (1-int(dones_arr[k])) - values[k])
                     discount *= self.gamma*self.gae_lambda
                 advantage[t] = a_t
-            advantage = T.tensor(advantage).to(self.actor.device)
+            advantage = torch.tensor(advantage).to(self.actor.device)
 
-            values = T.tensor(values).to(self.actor.device)
+            values = torch.tensor(values).to(self.actor.device)
             for batch in batches:
-                states = T.tensor(state_arr[batch], dtype=T.float).to(self.actor.device)
-                old_probs = T.tensor(old_prob_arr[batch]).to(self.actor.device)
-                actions = T.tensor(action_arr[batch]).to(self.actor.device)
+                states = torch.tensor(state_arr[batch], dtype=torch.float32).to(self.actor.device)
+                old_probs = torch.tensor(old_prob_arr[batch]).to(self.actor.device)
+                actions = torch.tensor(action_arr[batch]).to(self.actor.device)
 
                 dist = self.actor(states)
                 critic_value = self.critic(states)
 
-                critic_value = T.squeeze(critic_value)
+                critic_value = torch.squeeze(critic_value)
 
                 new_probs = dist.log_prob(actions)
                 prob_ratio = new_probs.exp() / old_probs.exp()
                 #prob_ratio = (new_probs - old_probs).exp()
                 weighted_probs = advantage[batch] * prob_ratio
-                weighted_clipped_probs = T.clamp(prob_ratio, 1-self.policy_clip,
+                weighted_clipped_probs = torch.clamp(prob_ratio, 1-self.policy_clip,
                         1+self.policy_clip)*advantage[batch]
-                actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean()
+                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
                 returns = advantage[batch] + values[batch]
                 critic_loss = (returns-critic_value)**2
