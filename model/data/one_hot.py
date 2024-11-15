@@ -5,7 +5,7 @@ def transform_csv(input_file, output_file):
     df = pd.read_csv(input_file)
     
     # Add 1 to each element in "imbalance_regulation_state"
-    df['imbalance_regulation_state'] = df['imbalance_regulation_state'] + 1
+    #df['imbalance_regulation_state'] = df['imbalance_regulation_state'] + 1
     
     # Create one-hot encoded columns
     df['is_state_-1'] = (df['imbalance_regulation_state'] == -1).astype(int)
