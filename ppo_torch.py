@@ -98,11 +98,11 @@ class CriticNetwork(nn.Module):
             nn.Linear(*input_dims, fc1_dims),
             nn.LayerNorm(fc1_dims),  # Batch normalization after the first linear layer
             nn.LeakyReLU(),
-            nn.Dropout(p=0.2),  # Dropout with 50% probability
+            nn.Dropout(p=0.3),  # Dropout with 50% probability
             nn.Linear(fc1_dims, fc2_dims),
             nn.LayerNorm(fc2_dims),  # Batch normalization after the second linear layer
             nn.LeakyReLU(),
-            nn.Dropout(p=0.2),  # Dropout with 50% probability
+            nn.Dropout(p=0.3),  # Dropout with 50% probability
             nn.Linear(fc2_dims, 1)
         )
 
@@ -124,7 +124,7 @@ class CriticNetwork(nn.Module):
 
 class Agent:
     def __init__(self, n_actions, input_dims, gamma=0.999, alpha=0.0003, gae_lambda=0.999,
-            policy_clip=0.15, batch_size=64, n_epochs=10,fc1_dims=56,fc2_dims=56):
+            policy_clip=0.15, batch_size=64, n_epochs=10,fc1_dims=256,fc2_dims=256):
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
