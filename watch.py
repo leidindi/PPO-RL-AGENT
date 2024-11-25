@@ -19,7 +19,7 @@ n_epochs = 10
 alpha = 0.0003
 n_games = 150
 
-model = Agent(n_actions=env.action_space.n, input_dims=env.observation_space.shape,fc1_dims=24,fc2_dims=24)
+model = Agent(n_actions=env.action_space.n, input_dims=env.observation_space.shape)
 model.load_models()
 
 model.actor.eval()

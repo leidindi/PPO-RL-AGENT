@@ -5,15 +5,16 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 
+device_used = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f'The device being used is {device_used}')
 class PPOMemory:
     def __init__(self, batch_size):
-        self.states = []
-        self.probs = []
-        self.vals = []
-        self.actions = []
-        self.rewards = []
-        self.dones = []
-
+        self.states = torch.tensor([], device=device_used) 
+        self.probs = torch.tensor([], device=device_used) 
+        self.vals = torch.tensor([], device=device_used) 
+        self.actions = torch.tensor([], device=device_used) 
+        self.rewards = torch.tensor([], device=device_used) 
+        self.dones = torch.tensor([], device=device_used)
         self.batch_size = batch_size
 
     def generate_batches(self):
@@ -22,30 +23,33 @@ class PPOMemory:
         indices = np.arange(n_states, dtype=np.int64)
         np.random.shuffle(indices)
         batches = [indices[i:i+self.batch_size] for i in batch_start]
-
-        return np.array(self.states),\
-                    np.array(self.actions),\
-                        np.array(self.probs),\
-                            np.array(self.vals),\
-                                np.array(self.rewards),\
-                                    np.array(self.dones),\
-                                        batches
+        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, batches
 
     def store_memory(self, state, action, probs, vals, reward, done):
-        self.states.append(state)
-        self.actions.append(action)
-        self.probs.append(probs)
-        self.vals.append(vals)
-        self.rewards.append(reward)
-        self.dones.append(done)
+        # Ensure all inputs are tensors
+        state = torch.tensor(np.array([state]), dtype=torch.float32, device=device_used)
+        action = torch.tensor(np.array([action]), dtype=torch.float32, device=device_used)
+        probs = torch.tensor(np.array([probs]), dtype=torch.float32, device=device_used)
+        vals = torch.tensor(np.array([vals]), dtype=torch.float32, device=device_used)
+        reward = torch.tensor(np.array([reward]), dtype=torch.float32, device=device_used)
+        done = torch.tensor(np.array([done]), dtype=torch.bool, device=device_used)
+
+        # Append using torch.cat
+        self.states = torch.cat((self.states, state))       if self.states.numel() > 0 else state
+        self.actions = torch.cat((self.actions, action))    if self.actions.numel() > 0 else action
+        self.probs = torch.cat((self.probs, probs))         if self.probs.numel() > 0 else probs
+        self.vals = torch.cat((self.vals, vals))            if self.vals.numel() > 0 else vals
+        self.rewards = torch.cat((self.rewards, reward))    if self.rewards.numel() > 0 else reward
+        self.dones = torch.cat((self.dones, done))          if self.dones.numel() > 0 else done
+
 
     def clear_memory(self):
-        self.states = []
-        self.probs = []
-        self.actions = []
-        self.rewards = []
-        self.dones = []
-        self.vals = []
+        self.states = torch.tensor(np.array([]), device=device_used) 
+        self.probs = torch.tensor(np.array([]), device=device_used) 
+        self.vals = torch.tensor(np.array([]), device=device_used) 
+        self.actions = torch.tensor(np.array([]), device=device_used) 
+        self.rewards = torch.tensor(np.array([]), device=device_used) 
+        self.dones = torch.tensor(np.array([]), device=device_used)
 
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, alpha,
@@ -56,19 +60,19 @@ class ActorNetwork(nn.Module):
         self.actor = nn.Sequential(
             nn.Linear(*input_dims, fc1_dims),
             nn.LayerNorm(fc1_dims),  # Batch normalization after the first linear layer
-            nn.LeakyReLU(),
-            nn.Dropout(p=0.5),  # Dropout with 50% probability
+            nn.ReLU(),
+            nn.Dropout(p=0.3),  # Dropout with 50% probability
             nn.Linear(fc1_dims, fc2_dims),
             nn.LayerNorm(fc2_dims),  # Batch normalization after the second linear layer
-            nn.LeakyReLU(),
-            nn.Dropout(p=0.5),  # Dropout with 50% probability
+            nn.ReLU(),
+            nn.Dropout(p=0.3),  # Dropout with 50% probability
             nn.Linear(fc2_dims, n_actions),
             nn.Softmax(dim=-1)
         )
 
         self.optimizer = optim.Adam(self.parameters(), lr=alpha, weight_decay = (alpha*3)/10)
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.to(self.device)
+        self.device = device_used
+        self.to(device_used)
 
     def forward(self, state):
         assert state.shape != torch.Size([0]), "Error: torch tensor has an empty shape!"              
@@ -103,8 +107,8 @@ class CriticNetwork(nn.Module):
         )
 
         self.optimizer = optim.Adam(self.parameters(), lr=alpha, weight_decay = (alpha*3)/10)
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.to(self.device)
+        self.device = device_used
+        self.to(device_used)
 
     def forward(self, state):
         assert state.shape != torch.Size([0]), "Error: torchhe tensor has an empty shape!"
@@ -119,8 +123,8 @@ class CriticNetwork(nn.Module):
         self.load_state_dict(torch.load(self.checkpoint_file))
 
 class Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.99,
-            policy_clip=0.2, batch_size=64, n_epochs=10,fc1_dims=256,fc2_dims=256):
+    def __init__(self, n_actions, input_dims, gamma=0.999, alpha=0.0003, gae_lambda=0.999,
+            policy_clip=0.15, batch_size=64, n_epochs=10,fc1_dims=56,fc2_dims=56):
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
@@ -137,11 +141,14 @@ class Agent:
         print('... saving models ...')
         self.actor.save_checkpoint()
         self.critic.save_checkpoint()
+        print('... model has been saved ...')
+
 
     def load_models(self):
         print('... loading models ...')
         self.actor.load_checkpoint()
         self.critic.load_checkpoint()
+        print('... model has been loaded ...')
 
     def choose_action(self, observation, debug = False):
         #debug state output
@@ -170,28 +177,35 @@ class Agent:
 
     def learn(self):
         for _ in range(self.n_epochs):
-            state_arr, action_arr, old_prob_arr, vals_arr,\
-            reward_arr, dones_arr, batches = \
-                    self.memory.generate_batches()
+
+            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
 
             values = vals_arr
-            advantage = np.zeros(len(reward_arr), dtype=np.float32)
+            rewards = reward_arr
+            dones = dones_arr.int()
 
-            for t in range(len(reward_arr)-1):
-                discount = 1
-                a_t = 0
-                for k in range(t, len(reward_arr)-1):
-                    a_t += discount*(reward_arr[k] + self.gamma*values[k+1]*\
-                            (1-int(dones_arr[k])) - values[k])
-                    discount *= self.gamma*self.gae_lambda
-                advantage[t] = a_t
-            advantage = torch.tensor(advantage).to(self.actor.device)
 
-            values = torch.tensor(values).to(self.actor.device)
+            values = torch.cat([values, torch.zeros(1, device=values.device)])
+
+            # Compute deltas including the immediate reward
+            deltas = rewards + self.gamma * values[1:] * (1 - dones) - values[:-1]
+            # Compute deltas (reward + gamma * next_value * (1 - done) - value)
+            #deltas = rewards[:-1] + self.gamma * values[1:] * (1 - dones[:-1]) - values[:-1]
+
+            # Initialize advantage array
+            advantage = torch.zeros_like(deltas, device=deltas.device)
+
+            # Perform reverse cumulative sum with discount factors
+            gae = 0
+            for t in reversed(range(len(deltas))):
+                gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones[t]) * gae
+                advantage[t] = gae
+
+            values = values.clone().detach().to(self.actor.device)
             for batch in batches:
-                states = torch.tensor(state_arr[batch], dtype=torch.float32).to(self.actor.device)
-                old_probs = torch.tensor(old_prob_arr[batch]).to(self.actor.device)
-                actions = torch.tensor(action_arr[batch]).to(self.actor.device)
+                states = state_arr[batch].clone().detach().to(self.actor.device)
+                old_probs = old_prob_arr[batch].clone().detach().to(self.actor.device)
+                actions = action_arr[batch].clone().detach().to(self.actor.device)
 
                 dist = self.actor(states)
                 critic_value = self.critic(states)
@@ -199,11 +213,19 @@ class Agent:
                 critic_value = torch.squeeze(critic_value)
 
                 new_probs = dist.log_prob(actions)
-                prob_ratio = new_probs.exp() / old_probs.exp()
-                #prob_ratio = (new_probs - old_probs).exp()
+                #prob_ratio = new_probs.exp() / old_probs.exp()
+                prob_ratio = (new_probs - old_probs).exp()
                 weighted_probs = advantage[batch] * prob_ratio
-                weighted_clipped_probs = torch.clamp(prob_ratio, 1-self.policy_clip,
-                        1+self.policy_clip)*advantage[batch]
+
+                if torch.isnan(advantage).any() or torch.isinf(advantage).any():
+                        print("Invalid values found in advantage tensor")
+                if torch.isnan(prob_ratio).any() or torch.isinf(prob_ratio).any():
+                    print("Invalid values found in prob_ratio tensor")
+                try:
+                    weighted_clipped_probs = torch.clamp(prob_ratio, 1-self.policy_clip, 1+self.policy_clip)*advantage[batch]
+                except:
+                    print(advantage.cpu().numpy())
+                    pass
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
                 returns = advantage[batch] + values[batch]
