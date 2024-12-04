@@ -123,7 +123,7 @@ class CriticNetwork(nn.Module):
         self.load_state_dict(torch.load(self.checkpoint_file))
 
 class Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.999, alpha=0.0003, gae_lambda=0.999,
+    def __init__(self, n_actions, input_dims, gamma=1, alpha=0.0003, gae_lambda=1,
             policy_clip=0.15, batch_size=64, n_epochs=10,fc1_dims=256,fc2_dims=256):
         self.gamma = gamma
         self.policy_clip = policy_clip
@@ -187,19 +187,35 @@ class Agent:
 
             values = torch.cat([values, torch.zeros(1, device=values.device)])
 
+            
             # Compute deltas including the immediate reward
             deltas = rewards + self.gamma * values[1:] * (1 - dones) - values[:-1]
-            # Compute deltas (reward + gamma * next_value * (1 - done) - value)
-            #deltas = rewards[:-1] + self.gamma * values[1:] * (1 - dones[:-1]) - values[:-1]
 
-            # Initialize advantage array
             advantage = torch.zeros_like(deltas, device=deltas.device)
+            
+            # ---------------------------------------------------------------
+            # old nested loop solution
+            #for t in range(len(reward_arr)-1):
+            #    discount = 1
+            #    a_t = 0
+            #    for k in range(t, len(reward_arr)-1):
+            #
+            #        done_switch = 1-int(dones_arr[k])
+            #        rewards_diff = self.gamma*values[k+1]*done_switch - values[k]
+            #        all_rewards = reward_arr[k] + rewards_diff
+            #        a_t += discount*all_rewards
+            #        discount *= self.gamma*self.gae_lambda
+            #    advantage[t] = a_t
+            #advantage = torch.tensor(advantage).to(self.actor.device)
+            # ---------------------------------------------------------------
 
-            # Perform reverse cumulative sum with discount factors
+            # ---------------------------------------------------------------
+            # new reverse cumulative sum with discount factors
             gae = 0
             for t in reversed(range(len(deltas))):
                 gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones[t]) * gae
                 advantage[t] = gae
+            # --------------------------------------------------------------
 
             values = values.clone().detach().to(self.actor.device)
             for batch in batches:

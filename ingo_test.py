@@ -477,4 +477,70 @@ def KANtest():
             correct += 1
         sys.stdout.write(f'\rAccuracy of model predictions on the test set : {correct/(index+1):.2}, Model Guess : {guess}, actual answer {correct_answer}')
         sys.stdout.flush() 
-NNtest()
+
+import copy
+reward_arr = np.random.uniform(-1, 0, 10000)
+reward_arr -= 1
+reward_arr[-1] = 100
+dones_arr=np.zeros_like(reward_arr)
+dones_arr[-1] = 1
+values1=np.random.uniform(-25, 25, 10000)
+values=copy.deepcopy(values1)
+
+def deltatest1():
+    global values1
+    values = copy.deepcopy(values1)
+    gamma = 0.99
+    gae_lambda = 0.95
+    advantage = np.zeros_like(reward_arr)
+    values = np.append(values, values[-1], axis=None)
+
+    deltas = reward_arr + gamma * values[1:] * (1 - dones_arr) - values[:-1]
+    gae = 0
+    for t in reversed(range(len(deltas))):
+        gae = deltas[t] + gamma * gae_lambda * (1 - dones_arr[t]) * gae
+        advantage[t] = gae
+    return advantage
+
+def deltatest2():
+    global values
+    gamma = 0.99
+    gae_lambda = 0.95
+    advantage = np.zeros_like(reward_arr)
+    for t in range(len(reward_arr)-1):
+        discount = 1
+        a_t = 0
+        for k in range(t, len(reward_arr)-1):
+
+            done_switch = 1-int(dones_arr[k])
+            rewards_diff = gamma*values[k+1]*done_switch - values[k]
+            all_rewards = reward_arr[k] + rewards_diff
+            a_t += discount*all_rewards
+            discount *= gamma*gae_lambda
+        advantage[t] = a_t
+    return advantage
+
+def timer():
+    import time
+
+    start_time = time.time()
+    result1 = deltatest1()
+    end_time = time.time()
+
+    # Print the execution time
+    print(f"Execution time: {end_time - start_time:.6f} seconds")
+
+
+    start_time = time.time()
+    result2 = deltatest2()
+    end_time = time.time()
+
+    # Print the execution time
+    print(f"Execution time: {end_time - start_time:.6f} seconds")
+    print(result1-result2)
+
+    from matplotlib import pyplot
+    pyplot.plot(result1)
+    pyplot.show()
+    pyplot.plot(result2)
+    pyplot.show()
