@@ -6,3 +6,4 @@
 *.pt
 *.json
 .DS_STORE
+*.csv
