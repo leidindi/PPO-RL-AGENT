@@ -7,3 +7,4 @@
 *.json
 .DS_STORE
 *.csv
+*.pkl
