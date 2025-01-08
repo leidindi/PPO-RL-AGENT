@@ -42,11 +42,15 @@ class BatteryMarketEnv(gym.Env):
         self.battery_capacity = 2.0  # MWh
         self.charge_speed = 1.0  # MW (2 hours until full charge)
         self.cycle_cost = 80.0  # Cost per full charge/discharge cycle
+        self.battery_limit = 0.1
 
         # State variables
         self.battery_status = np.ones((self.batch_size, 1))  # Initial battery charge level (in MWh)
         self.cash_balance = np.zeros((self.batch_size, 1)) + 1000.0  # Initial cash balance
         self.current_step = 0  # Track the current time step
+        
+        self.quarter_charge    = np.zeros((self.batch_size, 1))
+        self.quarter_discharge = np.zeros((self.batch_size, 1))
         
         self.quarter_feed   = np.zeros((self.batch_size, 1))
         self.quarter_take   = np.zeros((self.batch_size, 1))
@@ -89,10 +93,11 @@ class BatteryMarketEnv(gym.Env):
         self.quarter_mid    = np.zeros((self.batch_size, 1))
         self.quarter_state  = np.zeros((self.batch_size, 1))
 
-        # need to unwrao the iteration from the dataloader
+        # need to unwrap the iteration from the dataloader
         self.episode =  next(iter(self.data))[0].to(self.device)
         self.episode = self.episode.permute(0,2,1).contiguous()
 
+        # we process the encoded historical context every 15 minute/ every block
         num_rows_to_process = (self.window_size - self.encoder_dimmension)//15
 
         all_column_names = ["imbalance_feed_price",
@@ -165,42 +170,104 @@ class BatteryMarketEnv(gym.Env):
         # Get the initial observation
         return self._get_observation()
 
-    def step(self, action, charge_state):
+    def step(self, actions, charge_states):
         """
         Perform one time step in the batch environments.
-
-        action:
+        
+        Parameters:
+        actions: numpy array of shape (batch_size,)
             -1: Discharge battery
             0: Do nothing
             1: Charge battery
+        charge_states: numpy array of shape (batch_size, encoder_dimension)
+            The charge states for each environment in the batch
+        
+        Returns:
+        tuple: (observations, rewards, dones, infos)
         """
-
-        # Apply action
-        battery_limit = 0.1
-        if action == 1:  # Charge
-            charge_change = min(self.charge_speed / 60, self.battery_capacity - self.battery_status)  # MW to MWh
-            if not (self.battery_status +self.charge_amount > self.battery_capacity*(1-battery_limit)):
-                self.battery_status += self.charge_amount
-                self.cash_balance -=self.charge_amount * self._get_price(charge_state, action)  # Deduct cost of charging
-        elif action == -1:  # Discharge
-            discharge_change = min(self.charge_speed / 60, self.battery_status)  # MW to MWh
-            if not (self.battery_status - self.discharge_amount < self.battery_capacity*battery_limit):
-                self.battery_status -= self.discharge_amount
-                self.cash_balance += self.discharge_amount * self._get_price(charge_state, action)  # Add revenue from selling
-
-        # Update the time step
+        # Convert inputs to numpy if they're torch tensors
+        if torch.is_tensor(actions):
+            actions = actions.cpu().numpy()
+        if torch.is_tensor(charge_states):
+            charge_states = charge_states.cpu().numpy()
+        
+        # Initialize arrays
+        rewards = np.zeros(self.batch_size, dtype=np.float32)
+        charge_changes = np.zeros(self.batch_size, dtype=np.float32)
+        
+        # Calculate potential charge changes for all environments
+        max_charge_change = np.minimum(self.charge_speed / 60.0, self.battery_capacity * (1 - self.battery_limit) - self.battery_status)
+        
+        # Ensure no negative charge changes
+        charge_changes = np.maximum(max_charge_change, 0)
+        
+        # Handle charging (action == 1)
+        charging_mask = (actions == 1)
+        if np.any(charging_mask):
+            self.quarter_charge[charging_mask] += charge_changes[charging_mask]
+        
+        # Handle discharging (action == -1)
+        discharging_mask = (actions == -1)
+        if np.any(discharging_mask):
+            self.quarter_discharge[discharging_mask] += charge_changes[discharging_mask]
+        
+        # Apply cycle costs for active batteries (charging or discharging)
+        active_mask = (actions != 0)
+        if np.any(active_mask):
+            cycle_costs = -(self.charge_speed / 60.0) * self.cycle_cost
+            rewards[active_mask] = cycle_costs
+            self.cash_balance[active_mask] += cycle_costs
+        
+        # Handle end of 15-minute period
+        if self.current_step % 15 == 0:
+            # Get final charge states for the period
+            final_states = charge_states[:, -1]
+            
+            # Calculate rewards for the quarter
+            charging_prices = self._get_price(final_states, 1)
+            discharging_prices = self._get_price(final_states, -1)
+            
+            quarter_rewards = (-self.quarter_charge * charging_prices + self.quarter_discharge * discharging_prices)
+            
+            # Update cash balances and rewards
+            self.cash_balance += quarter_rewards
+            rewards += quarter_rewards
+            
+            # Reset quarter accumulators
+            self.quarter_charge.fill(0)
+            self.quarter_discharge.fill(0)
+        
+        # Update time step (same for all environments)
         self.current_step += 1
-
-        # Compute reward (cash balance change)
-        reward = self.cash_balance
-
-        # Check if episode is done
-        done = self.current_step >= len(self.data) - 1
-
-        # Get the next observation
+        
+        # Check if episodes are done
+        dones = np.full( self.batch_size, self.current_step >= self.window_size - self.encoder_dimmension - 1, dtype=bool)
+        
+        # Get the next observations (already batched)
         obs = self._get_observation()
-
-        return obs, reward, done, {}
+        
+        # Create truncated array (required for Gymnasium)
+        truncated = np.zeros(self.batch_size, dtype=bool)
+        
+        # Additional info dictionary
+        infos = {
+            'quarter_charge': self.quarter_charge.copy(),
+            'quarter_discharge': self.quarter_discharge.copy(),
+            'battery_status': self.battery_status.copy(),
+            'cash_balance': self.cash_balance.copy()
+        }
+        
+        # Handle Gymnasium's step API requirements
+        if self.batch_size == 1:
+            return (
+                obs[0] if isinstance(obs, np.ndarray) else obs,
+                float(rewards[0]),
+                bool(dones[0]),
+                bool(truncated[0]),
+                {k: v[0] if isinstance(v, np.ndarray) else v for k, v in infos.items()}
+            )
+        else:
+            return obs, rewards, dones, truncated, infos
 
     def _get_price(self, reg_state, action):
         """Get the current electricity market price."""
@@ -295,18 +362,39 @@ class BatteryMarketEnv(gym.Env):
             self.quarter_feed = np.zeros((self.batch_size, 1))
             self.quarter_take = np.zeros((self.batch_size, 1))
             self.quarter_mid = np.zeros((self.batch_size, 1))
-            self.quarter_state = np.zeros((self.batch_size, 1))
+            self.quarter_state = np.zeros((self.batch_size, 1))            
+        
+            self.quarter_charge    = np.zeros((self.batch_size, 1))
+            self.quarter_discharge = np.zeros((self.batch_size, 1))
         
         # store step, taken straight from each column respectively
 
 
-
+        # update the min feed
         self.quarter_feed[:,0]   = np.minimum(self.quarter_feed[:,0], historical_data[:,-8].cpu().numpy())
+        # update the maximum take
         self.quarter_take[:,0]   = np.maximum(self.quarter_take[:,0], historical_data[:,-9].cpu().numpy())
+        # update the mid price
         self.quarter_mid[:,0]    = historical_data[:,-7].cpu().numpy()
 
+        # logic for infering state during quarter hour
+        mask_unchangeable = self.quarter_state == 2
+    
+        # Create masks for each condition
+        mask_both_active = (self.quarter_feed != 0.0) & (self.quarter_take != 0.0)
+        mask_take_only = (self.quarter_feed == 0.0) & (self.quarter_take != 0.0)
+        mask_feed_only = (self.quarter_feed != 0.0) & (self.quarter_take == 0.0)
+        mask_none_active = (self.quarter_feed == 0.0) & (self.quarter_take == 0.0)
         
-        self.quarter_state[:,0]  = historical_data[:,-1].cpu()
+        # Create new state array
+        new_state = np.where(mask_both_active, 2,
+                    np.where(mask_take_only, -1,
+                    np.where(mask_feed_only, 1,
+                    np.where(mask_none_active, 0,
+                            self.quarter_state))))
+        
+        # Keep original value where state was 2
+        self.quarter_state = np.where(mask_unchangeable, self.quarter_state, new_state)
 
         # Create observation
         #avg_price = self.data[start_idx:self.current_step, 0].mean().item() if self.current_step > 0 else 0.0
@@ -315,6 +403,8 @@ class BatteryMarketEnv(gym.Env):
             self.current_context,
             torch.tensor(self.battery_status, device=self.device),
             torch.tensor(self.cash_balance, device=self.device),
+            torch.tensor(self.quarter_charge, device=self.device),
+            torch.tensor(self.quarter_discharge, device=self.device),
             torch.tensor(self.quarter_feed, device=self.device),
             torch.tensor(self.quarter_take, device=self.device),
             torch.tensor(self.quarter_mid, device=self.device)
