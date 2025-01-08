@@ -179,7 +179,7 @@ class BatteryMarketEnv(gym.Env):
             -1: Discharge battery
             0: Do nothing
             1: Charge battery
-        charge_states: numpy array of shape (batch_size, encoder_dimension)
+        charge_states: numpy array of shape (batch_size,)
             The charge states for each environment in the batch
         
         Returns:
@@ -269,83 +269,91 @@ class BatteryMarketEnv(gym.Env):
         else:
             return obs, rewards, dones, truncated, infos
 
-    def _get_price(self, reg_state, action):
-        """Get the current electricity market price."""
-        if action == 0:
-            # standing by, unchanged
-            return 0
+    def _get_price(self, reg_states, actions):
+        """
+        Get the current electricity market prices for a batch of states and actions.
         
-        if reg_state == 0:
-            # no regulation, mid-price used
-            column_index = next((i for i, column_name in enumerate(self.csv_headers) if column_name == "mid_price"), -1)
-            if column_index == -1:
-                # the column name was not found
-                raise ValueError
-            step_index = self.encoder_dimmension + self.current_step
-
-            if action == 1:
-                # you are buying
-                return -1 * self.episode[column_index, step_index]
-            elif action == -1:
-                # you are selling
-                return self.episode[column_index, step_index]
-        elif reg_state == -1:
-            # down regulation
-            # get lowest take price this 15 min block
-            low_take_price = min(self.quarter_take) if self.quarter_take else None
+        Parameters:
+        reg_states: numpy array or torch tensor of shape (batch_size,)
+            Regulation states for each environment
+            0: no regulation (use mid price)
+            -1: down regulation (use take price)
+            1: up regulation (use feed price)
+            2: both up and down regulation (compare with mid price)
+        actions: numpy array or torch tensor of shape (batch_size,)
+            -1: Discharge/Selling
+            0: Do nothing
+            1: Charge/Buying
+        
+        Returns:
+            numpy array of shape (batch_size,) with prices for each environment
+        """
+        # Convert inputs to numpy if they're torch tensors
+        if torch.is_tensor(reg_states):
+            reg_states = reg_states.cpu().numpy()
+        if torch.is_tensor(actions):
+            actions = actions.cpu().numpy()
             
-            if pd.isnull(low_take_price):
-                raise ValueError
-
-            if action == 1:
-                # you are buying
-                return -1 * low_take_price
-            elif action == -1:
-                # you are selling
-                return low_take_price
-        elif reg_state == 1:
-            # up regulation
-            # get highest feed price this 15 min block
-            high_feed_price = max(self.quarter_feed) if self.quarter_feed else None
+        # Initialize prices array
+        prices = np.zeros_like(reg_states, dtype=np.float32)
+        
+        # Mask for active transactions (action != 0)
+        active_mask = (actions != 0)
+        
+        if not np.any(active_mask):
+            return prices  # Early return if all rows are action 0
+        
+        # Create masks for different regulation states
+        no_reg_mask = (reg_states == 0) & active_mask
+        down_reg_mask = (reg_states == -1) & active_mask
+        up_reg_mask = (reg_states == 1) & active_mask
+        both_reg_mask = (reg_states == 2) & active_mask
+        
+        # Create masks for buying/selling actions
+        buying_mask = (actions == 1)
+        selling_mask = (actions == -1)
+        
+        # Handle no regulation state (state 0)
+        if np.any(no_reg_mask):
+            prices[no_reg_mask & buying_mask] = -1 * self.quarter_mid
+            prices[no_reg_mask & selling_mask] = self.quarter_mid
+        
+        # Handle down regulation state (state -1)
+        if np.any(down_reg_mask):
+            prices[down_reg_mask & buying_mask] = -1 * self.quarter_take
+            prices[down_reg_mask & selling_mask] = self.quarter_take
+        
+        # Handle up regulation state (state 1)
+        if np.any(up_reg_mask):
+            prices[up_reg_mask & buying_mask] = -1 * self.quarter_feed
+            prices[up_reg_mask & selling_mask] = self.quarter_feed
+        
+        # Handle both regulations state (state 2)
+        if np.any(both_reg_mask):
+            # For buying in state 2
+            both_reg_buying = both_reg_mask & buying_mask
+            if np.any(both_reg_buying):
+                prices[both_reg_buying] = np.where(
+                    self.quarter_feed >= self.quarter_mid,
+                    -1 * self.quarter_feed,
+                    -1 * self.quarter_mid
+                )[both_reg_buying]
             
-            if pd.isnull(high_feed_price):
-                raise ValueError
-
-            if action == 1:
-                # you are buying
-                return -1 * high_feed_price
-            elif action == -1:
-                # you are selling
-                return high_feed_price
-        elif reg_state == 2:
-            # upwards and downwards regulation in same block
-            column_index = next((i for i, column_name in enumerate(self.csv_headers) if column_name == "mid_price"), -1)
-            if column_index == -1:
-                # the column name was not found
-                raise ValueError
-            step_index = self.encoder_dimmension + self.current_step
-
-            mid_price = self.episode[column_index, step_index]
-            high_feed_price = max(self.quarter_feed) if self.quarter_feed else None
-            low_take_price = min(self.quarter_take) if self.quarter_take else None
-            
-            if action == 1:
-                # you are buying
-                if high_feed_price >= mid_price:
-                    return -1 * high_feed_price
-                else:
-                    return -1 * mid_price
-            if action == -1:
-                # you are selling
-                if low_take_price <= mid_price:
-                    return low_take_price
-                else:
-                    return mid_price
-
-        else:
-            # The previous states are only permissable, the control flow should
-            # never come here
-            raise ValueError
+            # For selling in state 2
+            both_reg_selling = both_reg_mask & selling_mask
+            if np.any(both_reg_selling):
+                prices[both_reg_selling] = np.where(
+                    self.quarter_take <= self.quarter_mid,
+                    self.quarter_take,
+                    self.quarter_mid
+                )[both_reg_selling]
+        
+        # Check for invalid regulation states
+        invalid_mask = ~(no_reg_mask | down_reg_mask | up_reg_mask | both_reg_mask) & active_mask
+        if np.any(invalid_mask):
+            raise ValueError(f"Invalid regulation states detected: {reg_states[invalid_mask]}")
+        
+        return prices
 
     def _get_observation(self):
         """Get the current state of the environment."""
@@ -369,12 +377,12 @@ class BatteryMarketEnv(gym.Env):
         
         # store step, taken straight from each column respectively
 
-
-        # update the min feed
+        # THE INDEXES WILL BE WRONG IF THE UNDERLYING DATA COLUMN ORDER IS CHANGED
+        # update the min feed, confusing as it may be it is the lower low_take_price column
         self.quarter_feed[:,0]   = np.minimum(self.quarter_feed[:,0], historical_data[:,-8].cpu().numpy())
-        # update the maximum take
+        # update the maximum take, confusing as it may be it is the highest high_feed_price column
         self.quarter_take[:,0]   = np.maximum(self.quarter_take[:,0], historical_data[:,-9].cpu().numpy())
-        # update the mid price
+        # update the mid price, taken at face value
         self.quarter_mid[:,0]    = historical_data[:,-7].cpu().numpy()
 
         # logic for infering state during quarter hour
@@ -388,10 +396,13 @@ class BatteryMarketEnv(gym.Env):
         
         # Create new state array
         new_state = np.where(mask_both_active, 2,
-                    np.where(mask_take_only, -1,
-                    np.where(mask_feed_only, 1,
-                    np.where(mask_none_active, 0,
-                            self.quarter_state))))
+                        np.where(mask_take_only, -1,
+                            np.where(mask_feed_only, 1,
+                                np.where(mask_none_active, 0,
+                                    self.quarter_state)
+                                )
+                            )
+                        )
         
         # Keep original value where state was 2
         self.quarter_state = np.where(mask_unchangeable, self.quarter_state, new_state)
@@ -414,7 +425,7 @@ class BatteryMarketEnv(gym.Env):
 
     def render(self, mode="human"):
         """Render the environment state."""
-        print(f"Step: {self.current_step}, Battery: {self.battery_status:.2f} MWh, "
+        print(f"Step: {self.current_step}, Battery: {self.battery_status:.2f} MWh, " 
               f"Cash: {self.cash_balance:.2f}, Price: {self._get_price():.2f}")
 
     def close(self):
