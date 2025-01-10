@@ -252,8 +252,8 @@ class Agent:
             #print(f"deltas_arr device: {deltas_arr.device}, shape: {deltas_arr.shape}")    
 
             for batch in batches:
-                if stability_counter and stability_counter % 500 == 0:
-                    pass
+                if stability_counter % 10 == 0:
+                    print(total_loss)
                 stability_counter += 1
                 # assure there are no gradients in the beginning
                 self.actor.optimizer.zero_grad()

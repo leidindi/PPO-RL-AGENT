@@ -16,7 +16,7 @@ import copy
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 class BatteryMarketEnv(gym.Env):
-    def __init__(self, csv_path = "final-imbalance-data-training.csv", autoencoder_model = None, device="cuda"):
+    def __init__(self, csv_path = "final-imbalance-data-training.csv", autoencoder_model = None, batch_size = 4, device="cuda"):
         super(BatteryMarketEnv, self).__init__()
         self.device = device
         # Load market data
@@ -28,7 +28,7 @@ class BatteryMarketEnv(gym.Env):
         self.window_size = 60*24*8
         # constant for overlap between windows, circa 66% overlap if 60*24*6 and 60*24*2
         self.stride = 60*24*3
-        self.batch_size = 4
+        self.batch_size = batch_size
 
         self.data = autoencoder.load_csv_for_autoencoder(csv_file = csv_path, feature_cols=self.csv_headers
                                                          , window_size = self.window_size, stride = self.stride
@@ -413,6 +413,10 @@ class BatteryMarketEnv(gym.Env):
         # update the mid price, taken at face value
         self.quarter_mid = historical_data[:,-7].cpu().numpy()
 
+        # we also have to ensure that we don't have a look-ahead bias
+        # so if we pass on historical data as an observation we need to remove highest/lowest of 
+        # a quarter hour that has not passed yet
+
         # logic for infering state during quarter hour
         mask_unchangeable = self.quarter_state == 2
     
@@ -440,13 +444,13 @@ class BatteryMarketEnv(gym.Env):
         #avg_price = self.average_price
         obs = torch.cat([
             self.current_context,
-            torch.tensor(self.battery_status, device=self.device).view(4,1),
-            torch.tensor(self.cash_balance, device=self.device).view(4,1),
-            torch.tensor(self.quarter_charge, device=self.device).view(4,1),
-            torch.tensor(self.quarter_discharge, device=self.device).view(4,1),
-            torch.tensor(self.quarter_feed, device=self.device).view(4,1),
-            torch.tensor(self.quarter_take, device=self.device).view(4,1),
-            torch.tensor(self.quarter_mid, device=self.device).view(4,1)
+            torch.tensor(self.battery_status, device=self.device).view(self.batch_size,1),
+            torch.tensor(self.cash_balance, device=self.device).view(self.batch_size,1),
+            torch.tensor(self.quarter_charge, device=self.device).view(self.batch_size,1),
+            torch.tensor(self.quarter_discharge, device=self.device).view(self.batch_size,1),
+            torch.tensor(self.quarter_feed, device=self.device).view(self.batch_size,1),
+            torch.tensor(self.quarter_take, device=self.device).view(self.batch_size,1),
+            torch.tensor(self.quarter_mid, device=self.device).view(self.batch_size,1)
         ], dim=1)
 
         return obs.detach().cpu().numpy() # Return as NumPy array for Gym compatibility
@@ -515,11 +519,11 @@ if __name__ == '__main__':
     device_used = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'The device being used is {device_used}')
 
-    env = BatteryMarketEnv(csv_path="final-imbalance-data-training.csv",autoencoder_model=combined_autoencoder,device=device_used)
+    batch_size = 35
+    env = BatteryMarketEnv(csv_path="final-imbalance-data-training.csv",autoencoder_model=combined_autoencoder,batch_size=batch_size, device=device_used)
     env_name = "Custom"
     N = 10
-    batch_size = 4
-    n_epochs = 15
+    n_epochs = 20
     alpha = 0.0004
 
     if env_name == "MountainCarContinuous-v0":
