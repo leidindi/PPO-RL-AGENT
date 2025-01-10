@@ -195,6 +195,7 @@ class Agent:
         return action, probs, value
 
     def learn(self):
+        stability_counter = 0
         for _ in range(self.n_epochs):
 
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
@@ -242,17 +243,28 @@ class Agent:
                 advantage_arr[t] = gae
             # --------------------------------------------------------------
 
+        
+            #print(f"state_arr device: {state_arr.device}, shape: {state_arr.shape}")
+            #print(f"vals_arr device: {vals_arr.device}, shape: {vals_arr.shape}")
+            #print(f"reward_arr device: {reward_arr.device}, shape: {reward_arr.shape}")
+            #print(f"dones_arr device: {dones_arr.device}, shape: {dones_arr.shape}")    
+            #print(f"advantage_arr device: {advantage_arr.device}, shape: {advantage_arr.shape}") 
+            #print(f"deltas_arr device: {deltas_arr.device}, shape: {deltas_arr.shape}")    
+
             for batch in batches:
-                
+                if stability_counter and stability_counter % 500 == 0:
+                    pass
+                stability_counter += 1
                 # assure there are no gradients in the beginning
                 self.actor.optimizer.zero_grad()
                 self.critic.optimizer.zero_grad()
 
-                states = state_arr[batch].detach()
-                old_probs = old_prob_arr[batch].detach()
-                actions = action_arr[batch].detach()
-                values = vals_arr[batch].detach()
-                advantage = advantage_arr[batch].detach()
+                states = state_arr[batch].detach().clone()
+                old_probs = old_prob_arr[batch].detach().clone()
+                actions = action_arr[batch].detach().clone()
+                values = vals_arr[batch].detach().clone()
+                advantage = advantage_arr[batch].detach().clone()
+
 
                 dist = self.actor(states)
                 critic_value = self.critic(states)
@@ -261,12 +273,14 @@ class Agent:
                 new_probs = dist.log_prob(actions)
                 #prob_ratio = new_probs.exp() / old_probs.exp()
                 prob_ratio = (new_probs - old_probs).exp()
-                weighted_probs = advantage[batch] * prob_ratio
+                weighted_probs = advantage * prob_ratio
 
                 if torch.isnan(advantage).any() or torch.isinf(advantage).any():
                     print("Invalid values found in advantage tensor")
+                    raise ValueError
                 if torch.isnan(prob_ratio).any() or torch.isinf(prob_ratio).any():
                     print("Invalid values found in prob_ratio tensor")
+                    raise ValueError
                 
                 weighted_clipped_probs = torch.clamp(prob_ratio, 1-self.policy_clip, 1+self.policy_clip)*advantage
                 

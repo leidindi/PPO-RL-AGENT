@@ -13,6 +13,8 @@ import autoencoder
 from datetime import datetime
 import copy
 
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 class BatteryMarketEnv(gym.Env):
     def __init__(self, csv_path = "final-imbalance-data-training.csv", autoencoder_model = None, device="cuda"):
         super(BatteryMarketEnv, self).__init__()
@@ -183,9 +185,10 @@ class BatteryMarketEnv(gym.Env):
         Returns:
         tuple: (observations, rewards, dones, infos)
         """
-        # Convert inputs to numpy if they're torch tensors
-        actions = actions - 1 # Mapping default action range from : 0->-1, 1->0, 2->1
-
+        # Mapping default action range from : 
+        #   0->-1, 1->0, 2->1, 
+        #   it needs to be done here for gymnasium compatability
+        actions = actions - 1 
         # charge_states: numpy array of shape (batch_size,)
         # The charge states for each environment in the batch
         charge_states = self.quarter_state
@@ -291,6 +294,10 @@ class BatteryMarketEnv(gym.Env):
         Returns:
             numpy array of shape (batch_size,) with prices for each environment
         """
+        if isinstance(actions, int):
+            # Create a new array with the same shape as reg_states
+            actions = np.full_like(reg_states, actions)
+
         # Convert inputs to numpy if they're torch tensors
         if torch.is_tensor(reg_states):
             reg_states = reg_states.cpu().numpy()
