@@ -5,16 +5,30 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 
-device_used = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'The device being used is {device_used}')
+def assure_tensor_type(input_collection, device):
+    if not torch.is_tensor(input_collection):
+        return torch.tensor(np.array([input_collection]), dtype=torch.float32, device =device)
+    else:
+        return input_collection
+
+def add_to_tensor(prev_collection, new_data):
+    try:
+        if prev_collection.numel() > 0:
+            return torch.cat((prev_collection, new_data))        
+        else:
+            return new_data
+    except:
+        pass
+
 class PPOMemory:
-    def __init__(self, batch_size):
-        self.states = torch.tensor([], device=device_used) 
-        self.probs = torch.tensor([], device=device_used) 
-        self.vals = torch.tensor([], device=device_used) 
-        self.actions = torch.tensor([], device=device_used) 
-        self.rewards = torch.tensor([], device=device_used) 
-        self.dones = torch.tensor([], device=device_used)
+    def __init__(self, batch_size, device):
+        self.device = device
+        self.states = torch.tensor([], device=self.device) 
+        self.probs = torch.tensor([], device=self.device) 
+        self.vals = torch.tensor([], device=self.device) 
+        self.actions = torch.tensor([], device=self.device) 
+        self.rewards = torch.tensor([], device=self.device) 
+        self.dones = torch.tensor([], device=self.device)
         self.batch_size = batch_size
 
     def generate_batches(self):
@@ -25,37 +39,41 @@ class PPOMemory:
         batches = [indices[i:i+self.batch_size] for i in batch_start]
         return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, batches
 
+
+
     def store_memory(self, state, action, probs, vals, reward, done):
         # Ensure all inputs are tensors
-        state = torch.tensor(np.array([state]), dtype=torch.float32, device=device_used)
-        action = torch.tensor(np.array([action]), dtype=torch.float32, device=device_used)
-        probs = torch.tensor(np.array([probs]), dtype=torch.float32, device=device_used)
-        vals = torch.tensor(np.array([vals]), dtype=torch.float32, device=device_used)
-        reward = torch.tensor(np.array([reward]), dtype=torch.float32, device=device_used)
-        done = torch.tensor(np.array([done]), dtype=torch.bool, device=device_used)
+        state   = assure_tensor_type(state, self.device)
+        action  = assure_tensor_type(action,self.device)
+        probs   = assure_tensor_type(probs, self.device)
+        vals    = assure_tensor_type(vals,  self.device)
+        reward  = assure_tensor_type(reward,self.device)
+        done    = assure_tensor_type(done,  self.device)
 
-        # Append using torch.cat
-        self.states = torch.cat((self.states, state))       if self.states.numel() > 0 else state
-        self.actions = torch.cat((self.actions, action))    if self.actions.numel() > 0 else action
-        self.probs = torch.cat((self.probs, probs))         if self.probs.numel() > 0 else probs
-        self.vals = torch.cat((self.vals, vals))            if self.vals.numel() > 0 else vals
-        self.rewards = torch.cat((self.rewards, reward))    if self.rewards.numel() > 0 else reward
-        self.dones = torch.cat((self.dones, done))          if self.dones.numel() > 0 else done
+        # Append using torch.cat if empty object variable
+        
+
+        self.states     = add_to_tensor(self.states,    state)
+        self.actions    = add_to_tensor(self.actions,   action)
+        self.probs      = add_to_tensor(self.probs,     probs)
+        self.vals       = add_to_tensor(self.vals,      vals)
+        self.rewards    = add_to_tensor(self.rewards,   reward)
+        self.dones      = add_to_tensor(self.dones,     done)
 
 
     def clear_memory(self):
-        self.states = torch.tensor(np.array([]), device=device_used) 
-        self.probs = torch.tensor(np.array([]), device=device_used) 
-        self.vals = torch.tensor(np.array([]), device=device_used) 
-        self.actions = torch.tensor(np.array([]), device=device_used) 
-        self.rewards = torch.tensor(np.array([]), device=device_used) 
-        self.dones = torch.tensor(np.array([]), device=device_used)
+        self.states = torch.tensor(np.array([]), device=self.device) 
+        self.probs = torch.tensor(np.array([]), device=self.device) 
+        self.vals = torch.tensor(np.array([]), device=self.device) 
+        self.actions = torch.tensor(np.array([]), device=self.device) 
+        self.rewards = torch.tensor(np.array([]), device=self.device) 
+        self.dones = torch.tensor(np.array([]), device=self.device)
 
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, alpha,
-            fc1_dims=256, fc2_dims=256, chkpt_dir='tmp\\ppo'):
+            fc1_dims=256, fc2_dims=256, chkpt_dir='tmp\\ppo', device="cuda"):
         super(ActorNetwork, self).__init__()
-
+        self.device = device
         self.checkpoint_file = os.path.join(chkpt_dir, 'actor_torch_ppo')
         self.actor = nn.Sequential(
             nn.Linear(*input_dims, fc1_dims),
@@ -71,8 +89,7 @@ class ActorNetwork(nn.Module):
         )
 
         self.optimizer = optim.Adam(self.parameters(), lr=alpha, weight_decay = (alpha*3)/10)
-        self.device = device_used
-        self.to(device_used)
+        self.to(self.device)
 
     def forward(self, state):
         assert state.shape != torch.Size([0]), "Error: torch tensor has an empty shape!"              
@@ -90,9 +107,9 @@ class ActorNetwork(nn.Module):
 
 class CriticNetwork(nn.Module):
     def __init__(self, input_dims, alpha, fc1_dims=256, fc2_dims=256,
-            chkpt_dir='tmp/ppo'):
+            chkpt_dir='tmp/ppo', device="cuda"):
         super(CriticNetwork, self).__init__()
-
+        self.device = device
         self.checkpoint_file = os.path.join(chkpt_dir, 'critic_torch_ppo')
         self.critic = nn.Sequential(
             nn.Linear(*input_dims, fc1_dims),
@@ -107,8 +124,7 @@ class CriticNetwork(nn.Module):
         )
 
         self.optimizer = optim.Adam(self.parameters(), lr=alpha, weight_decay = (alpha*3)/10)
-        self.device = device_used
-        self.to(device_used)
+        self.to(self.device)
 
     def forward(self, state):
         assert state.shape != torch.Size([0]), "Error: torchhe tensor has an empty shape!"
@@ -124,15 +140,16 @@ class CriticNetwork(nn.Module):
 
 class Agent:
     def __init__(self, n_actions, input_dims, gamma=1, alpha=0.0003, gae_lambda=1,
-            policy_clip=0.15, batch_size=64, n_epochs=10,fc1_dims=256,fc2_dims=256):
+            policy_clip=0.15, batch_size=64, n_epochs=10, fc1_dims=256, fc2_dims=256, device="cuda"):
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
         self.gae_lambda = gae_lambda
+        self.device = device
 
-        self.actor = ActorNetwork(n_actions, input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims)
-        self.critic = CriticNetwork(input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims)
-        self.memory = PPOMemory(batch_size)
+        self.actor = ActorNetwork(n_actions, input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims, device=self.device)
+        self.critic = CriticNetwork(input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims, device=self.device)
+        self.memory = PPOMemory(batch_size, device=self.device)
        
     def remember(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -164,14 +181,16 @@ class Agent:
 
         observation = torch.tensor(np.array(observation), dtype=torch.float32)
         state = observation.to(self.actor.device)
-        assert state.shape != torch.Size([0]), "Error: torchhe tensor has an empty shape!"
+        assert state.shape != torch.Size([0]), "Error: torch tensor has an empty shape!"
         dist = self.actor(state)
         value = self.critic(state)
         action = dist.sample()
 
-        probs = torch.squeeze(dist.log_prob(action)).item()
-        action = torch.squeeze(action).item()
-        value = torch.squeeze(value).item()
+        probs = dist.log_prob(action)
+
+        #probs = torch.squeeze(probs).item()
+        #action = torch.squeeze(action).item()
+        #value = torch.squeeze(value).item()
 
         return action, probs, value
 
@@ -184,14 +203,22 @@ class Agent:
             rewards = reward_arr
             dones = dones_arr.int()
 
+            print_shapes = False
+            if print_shapes:
+                print(state_arr.shape)
+                print(action_arr.shape)
+                print(old_prob_arr.shape)
+                print(vals_arr.shape)
+                print(reward_arr.shape)
+                print(dones_arr.shape)
 
-            values = torch.cat([values, torch.zeros(1, device=values.device)])
+            values = torch.cat([values, torch.zeros(1, device=self.device)])
 
             
             # Compute deltas including the immediate reward
             deltas = rewards + self.gamma * values[1:] * (1 - dones) - values[:-1]
 
-            advantage = torch.zeros_like(deltas, device=deltas.device)
+            advantage = torch.zeros_like(deltas, device=self.device)
             
             # ---------------------------------------------------------------
             # old nested loop solution
@@ -249,11 +276,11 @@ class Agent:
                 critic_loss = critic_loss.mean()
 
                 total_loss = actor_loss + 0.5*critic_loss
-                self.actor.optimizer.zero_grad()
-                self.critic.optimizer.zero_grad()
                 total_loss.backward()
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
+                self.actor.optimizer.zero_grad()
+                self.critic.optimizer.zero_grad()
 
         self.memory.clear_memory()               
 

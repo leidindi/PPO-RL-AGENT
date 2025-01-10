@@ -45,17 +45,17 @@ class BatteryMarketEnv(gym.Env):
         self.battery_limit = 0.1
 
         # State variables
-        self.battery_status = np.ones((self.batch_size, 1))  # Initial battery charge level (in MWh)
-        self.cash_balance = np.zeros((self.batch_size, 1)) + 1000.0  # Initial cash balance
+        self.battery_status = np.zeros(self.batch_size) + 1.0  # Initial battery charge level (in MWh)
+        self.cash_balance = np.zeros(self.batch_size) + 1000.0  # Initial cash balance
         self.current_step = 0  # Track the current time step
         
-        self.quarter_charge    = np.zeros((self.batch_size, 1))
-        self.quarter_discharge = np.zeros((self.batch_size, 1))
+        self.quarter_charge    = np.zeros(self.batch_size)
+        self.quarter_discharge = np.zeros(self.batch_size)
         
-        self.quarter_feed   = np.zeros((self.batch_size, 1))
-        self.quarter_take   = np.zeros((self.batch_size, 1))
-        self.quarter_mid    = np.zeros((self.batch_size, 1))
-        self.quarter_state  = np.zeros((self.batch_size, 1))
+        self.quarter_feed   = np.zeros(self.batch_size)
+        self.quarter_take   = np.zeros(self.batch_size)
+        self.quarter_mid    = np.zeros(self.batch_size)
+        self.quarter_state  = np.zeros(self.batch_size)
 
         # Autoencoder for market data compression
         self.autoencoder = autoencoder_model
@@ -73,7 +73,7 @@ class BatteryMarketEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(261,), # This value will need to change as features are introduced
+            shape=(263,), # This value will need to change as features are introduced
             dtype=np.float32
         )
         # Action space: -1 (discharge), 0 (do nothing), 1 (charge)
@@ -81,17 +81,17 @@ class BatteryMarketEnv(gym.Env):
 
     def reset(self):
         # Reset environment state
-        self.battery_status = np.ones((self.batch_size, 1))
-        self.cash_balance = np.zeros((self.batch_size, 1)) + 1000.0
+        self.battery_status = np.ones(self.batch_size)
+        self.cash_balance = np.zeros(self.batch_size) + 1000.0
         self.current_step = 0
         
-        self.quarter_charge    = np.zeros((self.batch_size, 1))
-        self.quarter_discharge = np.zeros((self.batch_size, 1))
+        self.quarter_charge    = np.zeros(self.batch_size)
+        self.quarter_discharge = np.zeros(self.batch_size)
         
-        self.quarter_feed   = np.zeros((self.batch_size, 1))
-        self.quarter_take   = np.zeros((self.batch_size, 1))
-        self.quarter_mid    = np.zeros((self.batch_size, 1))
-        self.quarter_state  = np.zeros((self.batch_size, 1))
+        self.quarter_feed   = np.zeros(self.batch_size)
+        self.quarter_take   = np.zeros(self.batch_size)
+        self.quarter_mid    = np.zeros(self.batch_size)
+        self.quarter_state  = np.zeros(self.batch_size)
 
         # need to unwrap the iteration from the dataloader
         self.episode =  next(iter(self.data))[0].to(self.device)
@@ -170,7 +170,7 @@ class BatteryMarketEnv(gym.Env):
         # Get the initial observation
         return self._get_observation()
 
-    def step(self, actions, charge_states):
+    def step(self, actions):
         """
         Perform one time step in the batch environments.
         
@@ -179,13 +179,16 @@ class BatteryMarketEnv(gym.Env):
             -1: Discharge battery
             0: Do nothing
             1: Charge battery
-        charge_states: numpy array of shape (batch_size,)
-            The charge states for each environment in the batch
         
         Returns:
         tuple: (observations, rewards, dones, infos)
         """
         # Convert inputs to numpy if they're torch tensors
+        actions = actions - 1 # Mapping default action range from : 0->-1, 1->0, 2->1
+
+        # charge_states: numpy array of shape (batch_size,)
+        # The charge states for each environment in the batch
+        charge_states = self.quarter_state
         if torch.is_tensor(actions):
             actions = actions.cpu().numpy()
         if torch.is_tensor(charge_states):
@@ -221,7 +224,7 @@ class BatteryMarketEnv(gym.Env):
         # Handle end of 15-minute period
         if self.current_step % 15 == 0:
             # Get final charge states for the period
-            final_states = charge_states[:, -1]
+            final_states = charge_states
             
             # Calculate rewards for the quarter
             charging_prices = self._get_price(final_states, 1)
@@ -314,25 +317,43 @@ class BatteryMarketEnv(gym.Env):
         selling_mask = (actions == -1)
         
         # Handle no regulation state (state 0)
-        if np.any(no_reg_mask):
-            prices[no_reg_mask & buying_mask] = -1 * self.quarter_mid
-            prices[no_reg_mask & selling_mask] = self.quarter_mid
+        if no_reg_mask.any():
+
+            check_mask = no_reg_mask & buying_mask
+            if check_mask.any():
+                prices[no_reg_mask & buying_mask] = -1 * self.quarter_mid
+
+            check_mask = no_reg_mask & selling_mask
+            if check_mask.any():
+                prices[no_reg_mask & selling_mask] = self.quarter_mid
         
         # Handle down regulation state (state -1)
-        if np.any(down_reg_mask):
-            prices[down_reg_mask & buying_mask] = -1 * self.quarter_take
-            prices[down_reg_mask & selling_mask] = self.quarter_take
+        if down_reg_mask.any():
+
+            check_mask = down_reg_mask & buying_mask
+            if check_mask.any():
+                prices[down_reg_mask & buying_mask] = -1 * self.quarter_take
+
+            check_mask = down_reg_mask & selling_mask
+            if check_mask.any():
+                prices[down_reg_mask & selling_mask] = self.quarter_take
         
         # Handle up regulation state (state 1)
-        if np.any(up_reg_mask):
-            prices[up_reg_mask & buying_mask] = -1 * self.quarter_feed
-            prices[up_reg_mask & selling_mask] = self.quarter_feed
+        if up_reg_mask.any():
+            
+            check_mask = up_reg_mask & buying_mask
+            if check_mask.any():
+                prices[up_reg_mask & buying_mask] = -1 * self.quarter_feed
+            
+            check_mask = up_reg_mask & selling_mask
+            if check_mask.any():
+                prices[up_reg_mask & selling_mask] = self.quarter_feed
         
         # Handle both regulations state (state 2)
-        if np.any(both_reg_mask):
+        if both_reg_mask.any():
             # For buying in state 2
             both_reg_buying = both_reg_mask & buying_mask
-            if np.any(both_reg_buying):
+            if both_reg_buying.any():
                 prices[both_reg_buying] = np.where(
                     self.quarter_feed >= self.quarter_mid,
                     -1 * self.quarter_feed,
@@ -341,7 +362,7 @@ class BatteryMarketEnv(gym.Env):
             
             # For selling in state 2
             both_reg_selling = both_reg_mask & selling_mask
-            if np.any(both_reg_selling):
+            if both_reg_selling.any():
                 prices[both_reg_selling] = np.where(
                     self.quarter_take <= self.quarter_mid,
                     self.quarter_take,
@@ -350,7 +371,7 @@ class BatteryMarketEnv(gym.Env):
         
         # Check for invalid regulation states
         invalid_mask = ~(no_reg_mask | down_reg_mask | up_reg_mask | both_reg_mask) & active_mask
-        if np.any(invalid_mask):
+        if invalid_mask.any():
             raise ValueError(f"Invalid regulation states detected: {reg_states[invalid_mask]}")
         
         return prices
@@ -367,23 +388,23 @@ class BatteryMarketEnv(gym.Env):
         if self.current_step % 15 == 0:
             # a new 15 minute block
             self.current_context = self.encoded_episode[:,self.current_step//15,:]
-            self.quarter_feed = np.zeros((self.batch_size, 1))
-            self.quarter_take = np.zeros((self.batch_size, 1))
-            self.quarter_mid = np.zeros((self.batch_size, 1))
-            self.quarter_state = np.zeros((self.batch_size, 1))            
+            self.quarter_feed = np.zeros(self.batch_size)
+            self.quarter_take = np.zeros(self.batch_size)
+            self.quarter_mid = np.zeros(self.batch_size)
+            self.quarter_state = np.zeros(self.batch_size)            
         
-            self.quarter_charge    = np.zeros((self.batch_size, 1))
-            self.quarter_discharge = np.zeros((self.batch_size, 1))
+            self.quarter_charge    = np.zeros(self.batch_size)
+            self.quarter_discharge = np.zeros(self.batch_size)
         
         # store step, taken straight from each column respectively
 
         # THE INDEXES WILL BE WRONG IF THE UNDERLYING DATA COLUMN ORDER IS CHANGED
         # update the min feed, confusing as it may be it is the lower low_take_price column
-        self.quarter_feed[:,0]   = np.minimum(self.quarter_feed[:,0], historical_data[:,-8].cpu().numpy())
+        self.quarter_feed = np.minimum(self.quarter_feed, historical_data[:,-8].cpu().numpy())
         # update the maximum take, confusing as it may be it is the highest high_feed_price column
-        self.quarter_take[:,0]   = np.maximum(self.quarter_take[:,0], historical_data[:,-9].cpu().numpy())
+        self.quarter_take = np.maximum(self.quarter_take, historical_data[:,-9].cpu().numpy())
         # update the mid price, taken at face value
-        self.quarter_mid[:,0]    = historical_data[:,-7].cpu().numpy()
+        self.quarter_mid = historical_data[:,-7].cpu().numpy()
 
         # logic for infering state during quarter hour
         mask_unchangeable = self.quarter_state == 2
@@ -412,16 +433,16 @@ class BatteryMarketEnv(gym.Env):
         #avg_price = self.average_price
         obs = torch.cat([
             self.current_context,
-            torch.tensor(self.battery_status, device=self.device),
-            torch.tensor(self.cash_balance, device=self.device),
-            torch.tensor(self.quarter_charge, device=self.device),
-            torch.tensor(self.quarter_discharge, device=self.device),
-            torch.tensor(self.quarter_feed, device=self.device),
-            torch.tensor(self.quarter_take, device=self.device),
-            torch.tensor(self.quarter_mid, device=self.device)
+            torch.tensor(self.battery_status, device=self.device).view(4,1),
+            torch.tensor(self.cash_balance, device=self.device).view(4,1),
+            torch.tensor(self.quarter_charge, device=self.device).view(4,1),
+            torch.tensor(self.quarter_discharge, device=self.device).view(4,1),
+            torch.tensor(self.quarter_feed, device=self.device).view(4,1),
+            torch.tensor(self.quarter_take, device=self.device).view(4,1),
+            torch.tensor(self.quarter_mid, device=self.device).view(4,1)
         ], dim=1)
 
-        return obs.cpu().numpy()  # Return as NumPy array for Gym compatibility
+        return obs.detach().cpu().numpy() # Return as NumPy array for Gym compatibility
 
     def render(self, mode="human"):
         """Render the environment state."""
@@ -483,7 +504,11 @@ if __name__ == '__main__':
     with open("autoencoder-Dense-times-2024-12-16.pkl", "rb") as file:
         combined_autoencoder["times"] = pickle.load(file)
 
-    env = BatteryMarketEnv(csv_path="final-imbalance-data-training.csv",autoencoder_model=combined_autoencoder)
+    
+    device_used = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'The device being used is {device_used}')
+
+    env = BatteryMarketEnv(csv_path="final-imbalance-data-training.csv",autoencoder_model=combined_autoencoder,device=device_used)
     env_name = "Custom"
     N = 10
     batch_size = 4
@@ -498,16 +523,16 @@ if __name__ == '__main__':
         # the same as previous elif, but this is 
         # here in case I want to customize for custom envs
         n_actions = env.action_space.n
-    agent = Agent(n_actions=n_actions, batch_size=batch_size, alpha=alpha, n_epochs=n_epochs, input_dims=env.observation_space.shape)
+    agent = Agent(n_actions=n_actions, batch_size=batch_size, alpha=alpha, n_epochs=n_epochs, input_dims=env.observation_space.shape, device=device_used)
     #agent.load_models()
     agent.memory.clear_memory()
 
-    n_games = 10000
+    n_games = 1000
     agent.actor.train()
     agent.critic.train()
     figure_file = 'plots/' + env_name + '-' + str(datetime.now().strftime("%Y-%m-%d"))+'.png'
 
-    best_score = -100000
+    best_score = 1000
     score_history = []
 
     learn_iters = 0
@@ -531,31 +556,38 @@ if __name__ == '__main__':
             if env_name == "MountainCarContinuous-v0":
                 action = np.array([(action-n_actions)/n_actions])
             next_observation, reward, done, truncated, _ = env.step(action)
-            next_observation = np.round(next_observation, 2)
+            #next_observation = np.round(next_observation, 2)
             n_steps += 1
             
-            if (np.abs(next_observation[0])*np.abs(next_observation[1])/(1.2*0.07))*2 > highest:
-                highest = (np.abs(next_observation[0])*np.abs(next_observation[1])/(1.2*0.07))*2
-                reward += highest
+            #if (np.abs(next_observation[0])*np.abs(next_observation[1])/(1.2*0.07))*2 > highest:
+            #    highest = (np.abs(next_observation[0])*np.abs(next_observation[1])/(1.2*0.07))*2
+            #    reward += highest
 
-            if done:
-                print("It managed to finish")
-                reward += 500
-            if truncated and 0:
-                print(f'It did not manage to finish, got truncated at step {n_steps}')
+            #if done:
+            #    print("It managed to finish")
+            #    reward += 500
+            #if truncated and 0:
+            #    print(f'It did not manage to finish, got truncated at step {n_steps}')
                 
             
             score += reward
-            agent.remember(observation, action, prob, val, reward, done)
+            for index in range(batch_size):
+                action_to_save = action[index].unsqueeze(0)
+                prob_to_save = prob[index].unsqueeze(0)
+                val_to_save = val[index]
+                reward_to_save = torch.tensor(reward[index], device=device_used).unsqueeze(0)
+                done_to_save = torch.tensor(done[index], device=device_used).unsqueeze(0)
+
+                agent.remember(observation[index], action_to_save, prob_to_save, val_to_save, reward_to_save, done_to_save)
             
-            if n_steps % N == 0 or done:# or truncated:
+            if n_steps % N == 0 or done.any():# or truncated:
                 agent.learn()
                 learn_iters += 1
             if isinstance(next_observation, tuple):
                 next_observation = next_observation[0]
             observation = next_observation
 
-            if done:# or truncated:
+            if done.any():# or truncated:
                 break
 
             
