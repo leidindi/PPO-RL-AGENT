@@ -150,6 +150,8 @@ class Agent:
         self.actor = ActorNetwork(n_actions, input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims, device=self.device)
         self.critic = CriticNetwork(input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims, device=self.device)
         self.memory = PPOMemory(batch_size, device=self.device)
+
+        self.stability_counter = 0
        
     def remember(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -195,9 +197,9 @@ class Agent:
         return action, probs, value
 
     def learn(self):
-        stability_counter = 0
         for _ in range(self.n_epochs):
-
+            
+            print(f'-Epoch number {_+1} has started')
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
 
             dones_arr = dones_arr.int()
@@ -252,9 +254,7 @@ class Agent:
             #print(f"deltas_arr device: {deltas_arr.device}, shape: {deltas_arr.shape}")    
 
             for batch in batches:
-                if stability_counter % 10 == 0:
-                    print(total_loss)
-                stability_counter += 1
+                self.stability_counter += 1
                 # assure there are no gradients in the beginning
                 self.actor.optimizer.zero_grad()
                 self.critic.optimizer.zero_grad()
@@ -295,6 +295,10 @@ class Agent:
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
 
-        self.memory.clear_memory()               
+                if self.stability_counter % 100 == 0:
+                    print(f'--Gradients calculated n*100 with loss:')
+                    print(total_loss)
+
+        self.memory.clear_memory()
 
 

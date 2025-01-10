@@ -247,7 +247,9 @@ class BatteryMarketEnv(gym.Env):
         self.current_step += 1
         
         # Check if episodes are done
-        dones = np.full( self.batch_size, self.current_step >= self.window_size - self.encoder_dimmension - 1, dtype=bool)
+        if self.encoder_dimmension + self.current_step >= self.window_size - 1:
+            pass
+        dones = np.full( self.batch_size, self.encoder_dimmension + self.current_step >= self.window_size - 1, dtype=bool)
         
         # Get the next observations (already batched)
         obs = self._get_observation()
@@ -328,58 +330,58 @@ class BatteryMarketEnv(gym.Env):
 
             check_mask = no_reg_mask & buying_mask
             if check_mask.any():
-                prices[no_reg_mask & buying_mask] = -1 * self.quarter_mid
+                prices[check_mask] = -1 * self.quarter_mid[check_mask]
 
             check_mask = no_reg_mask & selling_mask
             if check_mask.any():
-                prices[no_reg_mask & selling_mask] = self.quarter_mid
+                prices[check_mask] = self.quarter_mid[check_mask]
         
         # Handle down regulation state (state -1)
         if down_reg_mask.any():
 
             check_mask = down_reg_mask & buying_mask
             if check_mask.any():
-                prices[down_reg_mask & buying_mask] = -1 * self.quarter_take
+                prices[check_mask] = -1 * self.quarter_take[check_mask]
 
             check_mask = down_reg_mask & selling_mask
             if check_mask.any():
-                prices[down_reg_mask & selling_mask] = self.quarter_take
+                prices[check_mask] = self.quarter_take[check_mask]
         
         # Handle up regulation state (state 1)
         if up_reg_mask.any():
             
             check_mask = up_reg_mask & buying_mask
             if check_mask.any():
-                prices[up_reg_mask & buying_mask] = -1 * self.quarter_feed
+                prices[check_mask] = -1 * self.quarter_feed[check_mask]
             
             check_mask = up_reg_mask & selling_mask
             if check_mask.any():
-                prices[up_reg_mask & selling_mask] = self.quarter_feed
+                prices[check_mask] = self.quarter_feed[check_mask]
         
         # Handle both regulations state (state 2)
         if both_reg_mask.any():
             # For buying in state 2
-            both_reg_buying = both_reg_mask & buying_mask
-            if both_reg_buying.any():
-                prices[both_reg_buying] = np.where(
+            check_mask = both_reg_mask & buying_mask
+            if check_mask.any():
+                prices[check_mask] = np.where(
                     self.quarter_feed >= self.quarter_mid,
                     -1 * self.quarter_feed,
                     -1 * self.quarter_mid
-                )[both_reg_buying]
+                )[check_mask]
             
             # For selling in state 2
-            both_reg_selling = both_reg_mask & selling_mask
-            if both_reg_selling.any():
-                prices[both_reg_selling] = np.where(
+            check_mask = both_reg_mask & selling_mask
+            if check_mask.any():
+                prices[check_mask] = np.where(
                     self.quarter_take <= self.quarter_mid,
                     self.quarter_take,
                     self.quarter_mid
-                )[both_reg_selling]
+                )[check_mask]
         
         # Check for invalid regulation states
-        invalid_mask = ~(no_reg_mask | down_reg_mask | up_reg_mask | both_reg_mask) & active_mask
-        if invalid_mask.any():
-            raise ValueError(f"Invalid regulation states detected: {reg_states[invalid_mask]}")
+        check_mask = ~(no_reg_mask | down_reg_mask | up_reg_mask | both_reg_mask) & active_mask
+        if check_mask.any():
+            raise ValueError(f"Invalid regulation states detected: {reg_states[check_mask]}")
         
         return prices
 
@@ -522,8 +524,7 @@ if __name__ == '__main__':
     batch_size = 35
     env = BatteryMarketEnv(csv_path="final-imbalance-data-training.csv",autoencoder_model=combined_autoencoder,batch_size=batch_size, device=device_used)
     env_name = "Custom"
-    N = 10
-    n_epochs = 20
+    n_epochs = 10
     alpha = 0.0004
 
     if env_name == "MountainCarContinuous-v0":
@@ -537,8 +538,9 @@ if __name__ == '__main__':
     agent = Agent(n_actions=n_actions, batch_size=batch_size, alpha=alpha, n_epochs=n_epochs, input_dims=env.observation_space.shape, device=device_used)
     #agent.load_models()
     agent.memory.clear_memory()
-
-    n_games = 1000
+    
+    N = 1000
+    n_games = 100
     agent.actor.train()
     agent.critic.train()
     figure_file = 'plots/' + env_name + '-' + str(datetime.now().strftime("%Y-%m-%d"))+'.png'
@@ -552,6 +554,7 @@ if __name__ == '__main__':
     truncated = False
 
     for i in range(n_games):
+        print(f'Game number {i+1} has started')
         observation = env.reset()
         if isinstance(observation, tuple):
             observation = observation[0]
