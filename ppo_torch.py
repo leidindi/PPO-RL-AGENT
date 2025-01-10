@@ -12,13 +12,10 @@ def assure_tensor_type(input_collection, device):
         return input_collection
 
 def add_to_tensor(prev_collection, new_data):
-    try:
-        if prev_collection.numel() > 0:
-            return torch.cat((prev_collection, new_data))        
-        else:
-            return new_data
-    except:
-        pass
+    if prev_collection.numel() > 0:
+        return torch.cat((prev_collection, new_data))        
+    else:
+        return new_data
 
 class PPOMemory:
     def __init__(self, batch_size, device):
@@ -32,6 +29,9 @@ class PPOMemory:
         self.batch_size = batch_size
 
     def generate_batches(self):
+        if len(self.states) < self.batch_size:
+            # cant chop up the training samples when there arent enough for our batch size
+            raise ValueError
         n_states = len(self.states)
         batch_start = np.arange(0, n_states, self.batch_size)
         indices = np.arange(n_states, dtype=np.int64)
@@ -199,9 +199,7 @@ class Agent:
 
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
 
-            values = vals_arr
-            rewards = reward_arr
-            dones = dones_arr.int()
+            dones_arr = dones_arr.int()
 
             print_shapes = False
             if print_shapes:
@@ -212,13 +210,13 @@ class Agent:
                 print(reward_arr.shape)
                 print(dones_arr.shape)
 
-            values = torch.cat([values, torch.zeros(1, device=self.device)])
+            vals_arr = torch.cat([vals_arr, torch.zeros(1, device=self.device)])
 
             
             # Compute deltas including the immediate reward
-            deltas = rewards + self.gamma * values[1:] * (1 - dones) - values[:-1]
+            deltas_arr = reward_arr + self.gamma * vals_arr[1:] * (1 - dones_arr) - vals_arr[:-1]
 
-            advantage = torch.zeros_like(deltas, device=self.device)
+            advantage_arr = torch.zeros_like(deltas_arr, device=self.device)
             
             # ---------------------------------------------------------------
             # old nested loop solution
@@ -239,20 +237,25 @@ class Agent:
             # ---------------------------------------------------------------
             # new reverse cumulative sum with discount factors
             gae = 0
-            for t in reversed(range(len(deltas))):
-                gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones[t]) * gae
-                advantage[t] = gae
+            for t in reversed(range(len(deltas_arr))):
+                gae = deltas_arr[t] + self.gamma * self.gae_lambda * (1 - dones_arr[t]) * gae
+                advantage_arr[t] = gae
             # --------------------------------------------------------------
 
-            values = values.clone().detach().to(self.actor.device)
             for batch in batches:
-                states = state_arr[batch].clone().detach().to(self.actor.device)
-                old_probs = old_prob_arr[batch].clone().detach().to(self.actor.device)
-                actions = action_arr[batch].clone().detach().to(self.actor.device)
+                
+                # assure there are no gradients in the beginning
+                self.actor.optimizer.zero_grad()
+                self.critic.optimizer.zero_grad()
+
+                states = state_arr[batch].detach()
+                old_probs = old_prob_arr[batch].detach()
+                actions = action_arr[batch].detach()
+                values = vals_arr[batch].detach()
+                advantage = advantage_arr[batch].detach()
 
                 dist = self.actor(states)
                 critic_value = self.critic(states)
-
                 critic_value = torch.squeeze(critic_value)
 
                 new_probs = dist.log_prob(actions)
@@ -261,17 +264,15 @@ class Agent:
                 weighted_probs = advantage[batch] * prob_ratio
 
                 if torch.isnan(advantage).any() or torch.isinf(advantage).any():
-                        print("Invalid values found in advantage tensor")
+                    print("Invalid values found in advantage tensor")
                 if torch.isnan(prob_ratio).any() or torch.isinf(prob_ratio).any():
                     print("Invalid values found in prob_ratio tensor")
-                try:
-                    weighted_clipped_probs = torch.clamp(prob_ratio, 1-self.policy_clip, 1+self.policy_clip)*advantage[batch]
-                except:
-                    print(advantage.cpu().numpy())
-                    pass
+                
+                weighted_clipped_probs = torch.clamp(prob_ratio, 1-self.policy_clip, 1+self.policy_clip)*advantage
+                
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
-                returns = advantage[batch] + values[batch]
+                returns = advantage + values
                 critic_loss = (returns-critic_value)**2
                 critic_loss = critic_loss.mean()
 
@@ -279,8 +280,6 @@ class Agent:
                 total_loss.backward()
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
-                self.actor.optimizer.zero_grad()
-                self.critic.optimizer.zero_grad()
 
         self.memory.clear_memory()               
 
