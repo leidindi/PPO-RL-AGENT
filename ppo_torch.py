@@ -127,7 +127,7 @@ class CriticNetwork(nn.Module):
         self.to(self.device)
 
     def forward(self, state):
-        assert state.shape != torch.Size([0]), "Error: torchhe tensor has an empty shape!"
+        assert state.shape != torch.Size([0]), "Error: torche tensor has an empty shape!"
         value = self.critic(state)
 
         return value
@@ -199,7 +199,7 @@ class Agent:
     def learn(self):
         for _ in range(self.n_epochs):
             
-            print(f'-Epoch number {_+1} has started')
+            #print(f'-Epoch number {_+1} has started')
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
 
             dones_arr = dones_arr.int()
@@ -295,9 +295,9 @@ class Agent:
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
 
-                if self.stability_counter % 100 == 0:
-                    print(f'--Gradients calculated n*100 with loss:')
-                    print(total_loss)
+                #if self.stability_counter % 100 == 0:
+                    #print(f'--Gradients calculated n*100 with loss:')
+                    #print(total_loss)
 
         self.memory.clear_memory()
 

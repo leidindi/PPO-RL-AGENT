@@ -21,23 +21,24 @@ class BatteryMarketEnv(gym.Env):
         self.device = device
         # Load market data
         self.csv_headers = pd.read_csv(csv_path, nrows=0).columns.tolist()
-        self.csv_headers = self.csv_headers[7:]
+        # take out the index and the timestamp
+        self.csv_headers = self.csv_headers[2:]
 
         self.encoder_dimmension = 60*24*1 #( then elongated by 10 because of the interleaving for the encoders))
         # how long each training period is
-        self.window_size = 60*24*8
+        self.window_size = 60*24*2
         # constant for overlap between windows, circa 66% overlap if 60*24*6 and 60*24*2
-        self.stride = 60*24*3
+        self.stride = self.window_size//3
         self.batch_size = batch_size
 
         self.data = autoencoder.load_csv_for_autoencoder(csv_file = csv_path, feature_cols=self.csv_headers
                                                          , window_size = self.window_size, stride = self.stride
-                                                         , batch_size = self.batch_size, device=self.device)
+                                                         , batch_size = self.batch_size)
         # the first training window iteration is a wrapped list of [object], so it's 
         # unwrapped and thrown to the the device
         self.episode =  next(iter(self.data))[0].to(device)
         # flip axes and align memmory accordingly
-        self.episode = self.episode.permute(0,2,1).contiguous()
+        #self.episode = self.episode.permute(0,2,1).contiguous()
         self.current_context = None
 
         # Environment constants
@@ -47,17 +48,17 @@ class BatteryMarketEnv(gym.Env):
         self.battery_limit = 0.1
 
         # State variables
-        self.battery_status = np.zeros(self.batch_size) + 1.0  # Initial battery charge level (in MWh)
-        self.cash_balance = np.zeros(self.batch_size) + 1000.0  # Initial cash balance
+        self.battery_status  = torch.zeros(self.batch_size, device=self.device) + 1.0  # Initial battery charge level (in MWh)
+        self.cash_balance  = torch.zeros(self.batch_size, device=self.device)  # Initial cash balance
         self.current_step = 0  # Track the current time step
         
-        self.quarter_charge    = np.zeros(self.batch_size)
-        self.quarter_discharge = np.zeros(self.batch_size)
+        self.quarter_charge     = torch.zeros(self.batch_size, device=self.device)
+        self.quarter_discharge  = torch.zeros(self.batch_size, device=self.device)
         
-        self.quarter_feed   = np.zeros(self.batch_size)
-        self.quarter_take   = np.zeros(self.batch_size)
-        self.quarter_mid    = np.zeros(self.batch_size)
-        self.quarter_state  = np.zeros(self.batch_size)
+        self.quarter_feed    = torch.zeros(self.batch_size, device=self.device)
+        self.quarter_take    = torch.zeros(self.batch_size, device=self.device)
+        self.quarter_mid     = torch.zeros(self.batch_size, device=self.device)
+        self.quarter_state  = torch.zeros(self.batch_size, device=self.device)
 
         # Autoencoder for market data compression
         self.autoencoder = autoencoder_model
@@ -75,7 +76,7 @@ class BatteryMarketEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(263,), # This value will need to change as features are introduced
+            shape=(264,), # This value will need to change as features are introduced
             dtype=np.float32
         )
         # Action space: -1 (discharge), 0 (do nothing), 1 (charge)
@@ -83,17 +84,17 @@ class BatteryMarketEnv(gym.Env):
 
     def reset(self):
         # Reset environment state
-        self.battery_status = np.ones(self.batch_size)
-        self.cash_balance = np.zeros(self.batch_size) + 1000.0
-        self.current_step = 0
-        
-        self.quarter_charge    = np.zeros(self.batch_size)
-        self.quarter_discharge = np.zeros(self.batch_size)
-        
-        self.quarter_feed   = np.zeros(self.batch_size)
-        self.quarter_take   = np.zeros(self.batch_size)
-        self.quarter_mid    = np.zeros(self.batch_size)
-        self.quarter_state  = np.zeros(self.batch_size)
+        self.battery_status = torch.zeros(self.batch_size, device=self.device) + 1 # All ones
+        self.cash_balance = torch.zeros(self.batch_size, device=self.device)   # All zeros
+        self.current_step = torch.tensor(0, device=self.device)               # Single value, scalar tensor
+
+        self.quarter_charge = torch.zeros(self.batch_size, device=self.device)    # All zeros
+        self.quarter_discharge = torch.zeros(self.batch_size, device=self.device) # All zeros
+
+        self.quarter_feed = torch.zeros(self.batch_size, device=self.device)  # All zeros
+        self.quarter_take = torch.zeros(self.batch_size, device=self.device)  # All zeros
+        self.quarter_mid = torch.zeros(self.batch_size, device=self.device)   # All zeros
+        self.quarter_state = torch.zeros(self.batch_size, device=self.device) # All zeros
 
         # need to unwrap the iteration from the dataloader
         self.episode =  next(iter(self.data))[0].to(self.device)
@@ -118,7 +119,7 @@ class BatteryMarketEnv(gym.Env):
 
         for j, col_name in enumerate(self.csv_headers):
             if not(col_name in all_column_names):
-                print(f'Column name:{col_name} was not recognized')
+                #print(f'Column name:{col_name} was not recognized')
                 continue
             # Get the data for the current column
             col_data = self.episode[:, j,:]
@@ -136,14 +137,15 @@ class BatteryMarketEnv(gym.Env):
                 
             # Final tensor: Shape [64, 15841, 1440]
             final_tensor = torch.stack(batch_transformed)
+            shape = final_tensor.shape
             del batch_transformed
             del rows_transformed
             # Squeeze along dim=1
-            squeezed_tensor = final_tensor.view(-1,1440)
+            squeezed_tensor = final_tensor.view(-1, shape[2])
             del final_tensor
             # Define the batch size for processing parts of the tensor
             #print(squeezed_tensor.shape)
-            batch_size = squeezed_tensor.shape[0]//1  # divide into a size that fits into memory if needed
+            batch_size = squeezed_tensor.shape[0]//1  # divide into a size that fits into memmory if needed
 
             # Split the tensor into smaller chunks (batches)
             results = []
@@ -168,16 +170,17 @@ class BatteryMarketEnv(gym.Env):
         self.encoded_episode  = torch.stack(compressed_context, dim=3)
         shape = self.encoded_episode.shape
         self.encoded_episode = self.encoded_episode.view(shape[0],shape[1],-1)
+        self.current_context = self.encoded_episode[:,0]
         del compressed_context
         # Get the initial observation
         return self._get_observation()
 
     def step(self, actions):
         """
-        Perform one time step in the batch environments.
+        Perform one time step in the batch environments using PyTorch tensors.
         
         Parameters:
-        actions: numpy array of shape (batch_size,)
+        actions: torch.Tensor of shape (batch_size,)
             -1: Discharge battery
             0: Do nothing
             1: Charge battery
@@ -189,37 +192,34 @@ class BatteryMarketEnv(gym.Env):
         #   0->-1, 1->0, 2->1, 
         #   it needs to be done here for gymnasium compatability
         actions = actions - 1 
-        # charge_states: numpy array of shape (batch_size,)
         # The charge states for each environment in the batch
-        charge_states = self.quarter_state
-        if torch.is_tensor(actions):
-            actions = actions.cpu().numpy()
-        if torch.is_tensor(charge_states):
-            charge_states = charge_states.cpu().numpy()
+        charge_states = self.quarter_state.to(self.device)
         
         # Initialize arrays
-        rewards = np.zeros(self.batch_size, dtype=np.float32)
-        charge_changes = np.zeros(self.batch_size, dtype=np.float32)
+        rewards = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
+        charge_changes = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
         
         # Calculate potential charge changes for all environments
-        max_charge_change = np.minimum(self.charge_speed / 60.0, self.battery_capacity * (1 - self.battery_limit) - self.battery_status)
-        
+        max_charge_change = torch.minimum(
+        torch.tensor(self.charge_speed / 60.0, device=self.device),
+        self.battery_capacity * (1 - self.battery_limit) - self.battery_status)
         # Ensure no negative charge changes
-        charge_changes = np.maximum(max_charge_change, 0)
+        charge_changes = torch.maximum(max_charge_change, torch.tensor(0.0, device=self.device))
+    
         
         # Handle charging (action == 1)
         charging_mask = (actions == 1)
-        if np.any(charging_mask):
+        if charging_mask.any():
             self.quarter_charge[charging_mask] += charge_changes[charging_mask]
         
         # Handle discharging (action == -1)
         discharging_mask = (actions == -1)
-        if np.any(discharging_mask):
+        if discharging_mask.any():
             self.quarter_discharge[discharging_mask] += charge_changes[discharging_mask]
         
         # Apply cycle costs for active batteries (charging or discharging)
         active_mask = (actions != 0)
-        if np.any(active_mask):
+        if active_mask.any():
             cycle_costs = -(self.charge_speed / 60.0) * self.cycle_cost
             rewards[active_mask] = cycle_costs
             self.cash_balance[active_mask] += cycle_costs
@@ -240,39 +240,41 @@ class BatteryMarketEnv(gym.Env):
             rewards += quarter_rewards
             
             # Reset quarter accumulators
-            self.quarter_charge.fill(0)
-            self.quarter_discharge.fill(0)
+            self.quarter_charge.zero_()
+            self.quarter_discharge.zero_()
         
         # Update time step (same for all environments)
         self.current_step += 1
         
-        # Check if episodes are done
+        # debugger hook to check if episodes are finishing correctly
         if self.encoder_dimmension + self.current_step >= self.window_size - 1:
             pass
-        dones = np.full( self.batch_size, self.encoder_dimmension + self.current_step >= self.window_size - 1, dtype=bool)
+        done_condition = self.encoder_dimmension + self.current_step >= self.window_size - 1
+        dones = torch.full((self.batch_size,), done_condition, 
+                        dtype=torch.bool, device=self.device)
         
         # Get the next observations (already batched)
         obs = self._get_observation()
         
         # Create truncated array (required for Gymnasium)
-        truncated = np.zeros(self.batch_size, dtype=bool)
+        truncated = torch.zeros(self.batch_size, dtype=torch.bool, device=self.device)
         
         # Additional info dictionary
         infos = {
-            'quarter_charge': self.quarter_charge.copy(),
-            'quarter_discharge': self.quarter_discharge.copy(),
-            'battery_status': self.battery_status.copy(),
-            'cash_balance': self.cash_balance.copy()
+        'quarter_charge': self.quarter_charge.clone().detach(),
+        'quarter_discharge': self.quarter_discharge.clone().detach(),
+        'battery_status': self.battery_status.clone().detach(),
+        'cash_balance': self.cash_balance.clone().detach()
         }
         
         # Handle Gymnasium's step API requirements
         if self.batch_size == 1:
             return (
-                obs[0] if isinstance(obs, np.ndarray) else obs,
-                float(rewards[0]),
-                bool(dones[0]),
-                bool(truncated[0]),
-                {k: v[0] if isinstance(v, np.ndarray) else v for k, v in infos.items()}
+                obs[0] if isinstance(obs, torch.Tensor) else obs,
+                float(rewards[0].item()),
+                bool(dones[0].item()),
+                bool(truncated[0].item()),
+                {k: v[0] if isinstance(v, torch.Tensor) else v for k, v in infos.items()}
             )
         else:
             return obs, rewards, dones, truncated, infos
@@ -282,38 +284,39 @@ class BatteryMarketEnv(gym.Env):
         Get the current electricity market prices for a batch of states and actions.
         
         Parameters:
-        reg_states: numpy array or torch tensor of shape (batch_size,)
+        reg_states: torch.Tensor of shape (batch_size,)
             Regulation states for each environment
             0: no regulation (use mid price)
             -1: down regulation (use take price)
             1: up regulation (use feed price)
             2: both up and down regulation (compare with mid price)
-        actions: numpy array or torch tensor of shape (batch_size,)
+        actions: torch.Tensor of shape (batch_size,) or int
             -1: Discharge/Selling
             0: Do nothing
             1: Charge/Buying
         
         Returns:
-            numpy array of shape (batch_size,) with prices for each environment
+            torch.Tensor of shape (batch_size,) with prices for each environment
         """
-        if isinstance(actions, int):
-            # Create a new array with the same shape as reg_states
-            actions = np.full_like(reg_states, actions)
+        if not torch.is_tensor(reg_states):
+            raise TypeError("reg_states in the get_price function is not a tensor, but should be")
 
-        # Convert inputs to numpy if they're torch tensors
-        if torch.is_tensor(reg_states):
-            reg_states = reg_states.cpu().numpy()
-        if torch.is_tensor(actions):
-            actions = actions.cpu().numpy()
-            
+        # Handle scalar action input
+        if isinstance(actions, int):
+            actions = torch.full_like(reg_states, actions).to(self.device)
+        elif isinstance(actions, (float, np.integer, np.floating)):
+            actions = torch.full_like(reg_states, float(actions)).to(self.device)
+
+        reg_states = reg_states.to(self.device) 
         # Initialize prices array
-        prices = np.zeros_like(reg_states, dtype=np.float32)
+        prices = torch.zeros_like(reg_states, dtype=torch.float32, device=self.device)
         
         # Mask for active transactions (action != 0)
         active_mask = (actions != 0)
         
-        if not np.any(active_mask):
-            return prices  # Early return if all rows are action 0
+        # Early return if all rows are action 0
+        if not active_mask.any():
+            return prices  
         
         # Create masks for different regulation states
         no_reg_mask = (reg_states == 0) & active_mask
@@ -363,7 +366,7 @@ class BatteryMarketEnv(gym.Env):
             # For buying in state 2
             check_mask = both_reg_mask & buying_mask
             if check_mask.any():
-                prices[check_mask] = np.where(
+                prices[check_mask] = torch.where(
                     self.quarter_feed >= self.quarter_mid,
                     -1 * self.quarter_feed,
                     -1 * self.quarter_mid
@@ -372,48 +375,46 @@ class BatteryMarketEnv(gym.Env):
             # For selling in state 2
             check_mask = both_reg_mask & selling_mask
             if check_mask.any():
-                prices[check_mask] = np.where(
+                prices[check_mask] = torch.where(
                     self.quarter_take <= self.quarter_mid,
                     self.quarter_take,
                     self.quarter_mid
                 )[check_mask]
         
         # Check for invalid regulation states
-        check_mask = ~(no_reg_mask | down_reg_mask | up_reg_mask | both_reg_mask) & active_mask
-        if check_mask.any():
-            raise ValueError(f"Invalid regulation states detected: {reg_states[check_mask]}")
+        bogus_mask = ~(no_reg_mask | down_reg_mask | up_reg_mask | both_reg_mask) & active_mask
+        if bogus_mask.any():
+            raise ValueError(f"Invalid regulation states detected: {reg_states[bogus_mask]}")
         
         return prices
 
     def _get_observation(self):
         """Get the current state of the environment."""
 
-        historical_data = self.episode[:,:,self.encoder_dimmension+self.current_step]        
-        # Compress historical data with the autoencoder
-         
-          # Assuming autoencoder outputs 40 features
-        
+        historical_data = self.episode[:,:,self.encoder_dimmension+self.current_step]
 
         if self.current_step % 15 == 0:
             # a new 15 minute block
             self.current_context = self.encoded_episode[:,self.current_step//15,:]
-            self.quarter_feed = np.zeros(self.batch_size)
-            self.quarter_take = np.zeros(self.batch_size)
-            self.quarter_mid = np.zeros(self.batch_size)
-            self.quarter_state = np.zeros(self.batch_size)            
+            self.quarter_feed       = torch.zeros(self.batch_size, device=self.device)
+            self.quarter_take       = torch.zeros(self.batch_size, device=self.device)
+            self.quarter_mid        = torch.zeros(self.batch_size, device=self.device)
+            self.quarter_state      = torch.zeros(self.batch_size, device=self.device)
+            self.quarter_charge     = torch.zeros(self.batch_size, device=self.device)
+            self.quarter_discharge  = torch.zeros(self.batch_size, device=self.device)
         
-            self.quarter_charge    = np.zeros(self.batch_size)
-            self.quarter_discharge = np.zeros(self.batch_size)
-        
-        # store step, taken straight from each column respectively
-
         # THE INDEXES WILL BE WRONG IF THE UNDERLYING DATA COLUMN ORDER IS CHANGED
-        # update the min feed, confusing as it may be it is the lower low_take_price column
-        self.quarter_feed = np.minimum(self.quarter_feed, historical_data[:,-8].cpu().numpy())
-        # update the maximum take, confusing as it may be it is the highest high_feed_price column
-        self.quarter_take = np.maximum(self.quarter_take, historical_data[:,-9].cpu().numpy())
-        # update the mid price, taken at face value
-        self.quarter_mid = historical_data[:,-7].cpu().numpy()
+        # Update price values using tensor operations
+        # Note: Using historical_data directly as tensor, assuming it's already on correct device
+
+        # the quarter imbalance feed price is the lowest take_price
+        self.quarter_feed = torch.minimum(self.quarter_feed, historical_data[:,-8])
+        
+        # the quarter imbalance take price is the highest feed_price
+        self.quarter_take = torch.maximum(self.quarter_take, historical_data[:,-9])
+
+        # mid is taken at face value
+        self.quarter_mid = historical_data[:,-7]
 
         # we also have to ensure that we don't have a look-ahead bias
         # so if we pass on historical data as an observation we need to remove highest/lowest of 
@@ -421,39 +422,68 @@ class BatteryMarketEnv(gym.Env):
 
         # logic for infering state during quarter hour
         mask_unchangeable = self.quarter_state == 2
-    
-        # Create masks for each condition
+        
+        # Create masks for each condition (these are already batch_size shaped)
         mask_both_active = (self.quarter_feed != 0.0) & (self.quarter_take != 0.0)
         mask_take_only = (self.quarter_feed == 0.0) & (self.quarter_take != 0.0)
         mask_feed_only = (self.quarter_feed != 0.0) & (self.quarter_take == 0.0)
         mask_none_active = (self.quarter_feed == 0.0) & (self.quarter_take == 0.0)
         
-        # Create new state array
-        new_state = np.where(mask_both_active, 2,
-                        np.where(mask_take_only, -1,
-                            np.where(mask_feed_only, 1,
-                                np.where(mask_none_active, 0,
-                                    self.quarter_state)
-                                )
-                            )
-                        )
+        # Create batched state values instead of scalars
+        state_both = torch.full((self.batch_size,), 2., device=self.device)
+        state_take = torch.full((self.batch_size,), -1., device=self.device)
+        state_feed = torch.full((self.batch_size,), 1., device=self.device)
+        state_none = torch.full((self.batch_size,), 0., device=self.device)
         
-        # Keep original value where state was 2
-        self.quarter_state = np.where(mask_unchangeable, self.quarter_state, new_state)
+        # Create new state tensor with proper batching
+        new_state = torch.where(mask_both_active, state_both,
+            torch.where(mask_take_only, state_take,
+                torch.where(mask_feed_only, state_feed,
+                    torch.where(mask_none_active, state_none, 
+                        self.quarter_state
+                    )
+                )
+            )
+        )
+        
+        # Update quarter_state maintaining unchangeable states
+        if self.quarter_state.all() == 0:
+            self.quarter_state = new_state
+        else:
+            self.quarter_state = torch.where(mask_unchangeable, self.quarter_state, new_state)
 
         # Create observation
         #avg_price = self.data[start_idx:self.current_step, 0].mean().item() if self.current_step > 0 else 0.0
         #avg_price = self.average_price
         obs = torch.cat([
+            # autoencoder context
             self.current_context,
-            torch.tensor(self.battery_status, device=self.device).view(self.batch_size,1),
-            torch.tensor(self.cash_balance, device=self.device).view(self.batch_size,1),
-            torch.tensor(self.quarter_charge, device=self.device).view(self.batch_size,1),
-            torch.tensor(self.quarter_discharge, device=self.device).view(self.batch_size,1),
-            torch.tensor(self.quarter_feed, device=self.device).view(self.batch_size,1),
-            torch.tensor(self.quarter_take, device=self.device).view(self.batch_size,1),
-            torch.tensor(self.quarter_mid, device=self.device).view(self.batch_size,1)
+            
+            # entire game variables
+            self.battery_status.clone().detach().view(self.batch_size,1),
+            self.cash_balance.clone().detach().view(self.batch_size,1),
+
+            # quarter dependent variable
+            # for charge            
+            self.quarter_charge.clone().detach().view(self.batch_size,1),
+            self.quarter_discharge.clone().detach().view(self.batch_size,1),
+
+            # for current prices            
+            self.quarter_feed.clone().detach().view(self.batch_size,1),
+            self.quarter_take.clone().detach().view(self.batch_size,1),
+            self.quarter_mid.clone().detach().view(self.batch_size,1),
+
+            # for current state
+            self.quarter_state.clone().detach().view(self.batch_size,1)
+            
+            #torch.tensor(self.quarter_take, device=self.device).view(self.batch_size,1),
+            #torch.tensor(self.quarter_take, device=self.device).view(self.batch_size,1),
+            #torch.tensor(self.quarter_take, device=self.device).view(self.batch_size,1),
+            #torch.tensor(self.quarter_take, device=self.device).view(self.batch_size,1),
         ], dim=1)
+        
+        if (self.battery_status/self.battery_capacity > 1).any() or (self.battery_status < 0).any():
+            raise ValueError
 
         return obs.detach().cpu().numpy() # Return as NumPy array for Gym compatibility
 
@@ -465,7 +495,6 @@ class BatteryMarketEnv(gym.Env):
     def close(self):
         """Clean up resources."""
         pass
-
 
 def sample_value_function(agent, episode, save_dir="value_data"):
     # Generate 1000x1000 grid of states
@@ -493,6 +522,81 @@ def sample_value_function(agent, episode, save_dir="value_data"):
         pickle.dump(xyz, f)
     print(f"Saved data for episode {episode} at {filename}")
 
+class DualProgress:
+    def __init__(self, total_scenarios, steps_per_scenario, bar_length=40):
+        """
+        Initialize the dual progress bar system.
+        
+        Args:
+            total_scenarios (int): Total number of scenarios to run
+            steps_per_scenario (int): Number of steps in each scenario
+            bar_length (int): Length of each progress bar visualization
+        """
+        self.total_scenarios = total_scenarios
+        self.steps_per_scenario = steps_per_scenario
+        self.bar_length = bar_length
+        self.last_scenario_progress = -1
+        self.last_overall_progress = -1
+        
+    def create_bar(self, current, total, bar_length):
+        """Helper function to create a progress bar string."""
+        progress = int((current / total) * 100)
+        filled_length = int(bar_length * current // total)
+        bar = '█' * filled_length + '-' * (bar_length - filled_length)
+        return bar, progress
+        
+    def update(self, current_scenario, current_step, metrics=None):
+        """
+        Update both progress bars.
+        
+        Args:
+            current_scenario (int): Current scenario number (0-based)
+            current_step (int): Current step within the current scenario
+            metrics (dict): Optional dictionary of metrics to display
+        """
+        # Calculate progress for current scenario
+        scenario_bar, scenario_progress = self.create_bar(
+            current_step, 
+            self.steps_per_scenario, 
+            self.bar_length
+        )
+        
+        # Calculate overall progress
+        total_steps = self.total_scenarios * self.steps_per_scenario
+        current_total_steps = current_scenario * self.steps_per_scenario + current_step
+        overall_bar, overall_progress = self.create_bar(
+            current_total_steps, 
+            total_steps, 
+            self.bar_length
+        )
+        
+        # Only update if either progress has changed
+        if (scenario_progress != self.last_scenario_progress or 
+            overall_progress != self.last_overall_progress):
+            
+            self.last_scenario_progress = scenario_progress
+            self.last_overall_progress = overall_progress
+            
+            # Create the progress strings
+            scenario_str = f'Scenario {current_scenario + 1}/{self.total_scenarios} '
+            scenario_str += f'|{scenario_bar}| {scenario_progress}% '
+            scenario_str += f'({current_step}/{self.steps_per_scenario})'
+            
+            overall_str = f'Overall Progress |{overall_bar}| {overall_progress}% '
+            overall_str += f'({current_total_steps}/{total_steps})'
+            
+            # Add metrics if provided
+            metrics_str = ''
+            if metrics:
+                metrics_str = ' | ' + ' | '.join(f'{k}: {v:.2f}' for k, v in metrics.items())
+            
+            # Print both progress bars (with carriage return for in-place updates)
+            print(f'\r{scenario_str}\n{overall_str}{metrics_str}', end='\033[K\033[F', flush=True)
+            
+            # Print newline if training is complete
+            if (current_scenario == self.total_scenarios - 1 and 
+                current_step == self.steps_per_scenario):
+                print('\n\nTraining Complete!')
 
 if __name__ == '__main__':
     loaded_autoencoder = None
@@ -524,8 +628,8 @@ if __name__ == '__main__':
     batch_size = 35
     env = BatteryMarketEnv(csv_path="final-imbalance-data-training.csv",autoencoder_model=combined_autoencoder,batch_size=batch_size, device=device_used)
     env_name = "Custom"
-    n_epochs = 10
-    alpha = 0.0004
+    n_epochs = 1
+    alpha = 0.0001
 
     if env_name == "MountainCarContinuous-v0":
         n_actions = 100
@@ -539,13 +643,13 @@ if __name__ == '__main__':
     #agent.load_models()
     agent.memory.clear_memory()
     
-    N = 1000
-    n_games = 100
+    N = 100
+    n_games = 10
     agent.actor.train()
     agent.critic.train()
     figure_file = 'plots/' + env_name + '-' + str(datetime.now().strftime("%Y-%m-%d"))+'.png'
 
-    best_score = 1000
+    best_score = 0
     score_history = []
 
     learn_iters = 0
@@ -553,8 +657,9 @@ if __name__ == '__main__':
     done = False
     truncated = False
 
+    progress = DualProgress(n_games, env.window_size - env.encoder_dimmension + 1)
+
     for i in range(n_games):
-        print(f'Game number {i+1} has started')
         observation = env.reset()
         if isinstance(observation, tuple):
             observation = observation[0]
@@ -589,8 +694,8 @@ if __name__ == '__main__':
                 action_to_save = action[index].unsqueeze(0)
                 prob_to_save = prob[index].unsqueeze(0)
                 val_to_save = val[index]
-                reward_to_save = torch.tensor(reward[index], device=device_used).unsqueeze(0)
-                done_to_save = torch.tensor(done[index], device=device_used).unsqueeze(0)
+                reward_to_save = reward[index].clone().detach().unsqueeze(0)
+                done_to_save = done[index].clone().detach().unsqueeze(0)
 
                 agent.remember(observation[index], action_to_save, prob_to_save, val_to_save, reward_to_save, done_to_save)
             
@@ -601,22 +706,28 @@ if __name__ == '__main__':
                 next_observation = next_observation[0]
             observation = next_observation
 
+            metrics = {
+                'latest reward': torch.mean(reward)
+                }
+            
+            # Update progress bars
+            progress.update(i, env.current_step, metrics)
+
             if done.any():# or truncated:
                 break
-
-            
-        score_history.append(score)
-        avg_score = np.mean(score_history[-1:])
+        
+        score_history.extend(score)
+        avg_score = torch.mean(score)
 
         if avg_score > best_score:# and not truncated:
             best_score = avg_score
             agent.save_models()
 
-        if i % 50 == 0:
-            sample_value_function(agent,i)
+        # the sample value function does not apply to >2 dimmensional state spaces
+        #if i % 50 == 0:
+            #sample_value_function(agent,i)
 
-        print('episode', i, 'score %.1f' % score, 'avg score %.1f' % avg_score,
-                'time_steps', n_steps, 'learning_steps', learn_iters)
+        print('\nepisode', i, 'latest score %.1f' % score_history[-1], 'avg batch scores %.1f' % avg_score, 'time_steps', n_steps, 'learning_steps', learn_iters, '\n')
     x = [i+1 for i in range(len(score_history))]
     plot_learning_curve(x, score_history, figure_file)
 

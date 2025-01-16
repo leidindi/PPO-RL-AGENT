@@ -358,73 +358,69 @@ class DenseAutoencoder(nn.Module):
         reconstructed_flat = self.decoder(latent)   # (batch_size, input_dim)
         reconstructed = reconstructed_flat.view(batch_size, self.init_layer_size, self.input_size)
         return reconstructed
-
-def create_sequences(data, window_size, stride):
-    """
-        A function that chops up the csv files in a user defined sizes, with some overlap
-        Parameters:
-            data (int): .
-            window_size (int): How many rows of the unrelying data we want to look at.
-            stride (int): Like a CNN kernel stride, where the window is slid accross the time axis.
-
-        This model flattens the entire sequence of (features x timesteps) into a single vector, 
-        passes it through a sequence of linear layers for encoding, and then reconstructs it.
-        """
-    sequences = []
-    num_samples = data.shape[0]
-    # Move in increments of 'stride'
-    for start_idx in range(0, num_samples - window_size + 1, stride):
-        seq = data[start_idx:start_idx + window_size]  # shape (window_size, num_features)
-        sequences.append(seq)
-    return np.array(sequences, dtype=np.float32)
+  
 
 def load_csv_for_autoencoder(csv_file, feature_cols = ["mid_price","imbalance_take_price","imbalance_feed_price","imbalance_regulation_state","month","day_of_week","hour_of_day"], 
-                             window_size = 60*24, stride = 30, batch_size = 64, device="cuda"):
-    # Read the CSV
+                             window_size = 60*24, stride = 30, batch_size = 64):
+    """
+    Creates a PyTorch DataLoader from a CSV file containing time series data.
+    
+    Args:
+        csv_file (str): Path to the CSV file containing the data
+        feature_cols (list): List of column names to use as features
+        window_size (int): Size of the sliding window for sequence creation
+        stride (int): Number of steps to move the window forward
+        batch_size (int): Size of batches for the DataLoader
+    
+    Returns:
+        DataLoader: PyTorch DataLoader containing the sequences
+        
+    Raises:
+        ValueError: If the data has fewer samples than the window_size
+    
+    Notes:
+        Time columns ('month', 'day_of_week', 'hour_of_day') are preserved without scaling,
+        while other features are scaled to range (-1, 1). Original column order is maintained.
+    """
     df = pd.read_csv(csv_file)
-    # cut in half if there is too much data for my laptop ( heh)
-    #df = df.iloc[:len(df) // 2]
     
     time_cols = ['month', 'day_of_week', 'hour_of_day']
-    #df["month"] = np.sin(2 * np.pi * df["month"] / 12)
-    #df["day_of_week"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
-    #df["hour_of_day"] = np.sin(2 * np.pi * df["hour_of_day"] / 24)
-    # Separate the DataFrame into two parts
-    time_data = df[time_cols].copy()      # DataFrame of columns not to scale
     non_time_cols = [c for c in df.columns if ((c not in time_cols) and (c in feature_cols))]
-    non_time_data = df[non_time_cols].copy()  # DataFrame of columns to scale
-
-    # Choose a scaler
-    scaler = MinMaxScaler(feature_range=(-1, 1))
-
-    # Fit and transform only the non-time data
-    if non_time_data.shape[1] == 0:
-        scaled_non_time_data = non_time_data
-    else:
-        scaled_non_time_data = scaler.fit_transform(non_time_data.values.astype(np.float32))
-
-    # Convert back to a DataFrame with the same column names
-    scaled_non_time_df = pd.DataFrame(scaled_non_time_data, columns=non_time_cols, index=df.index)
-
-    # Recombine scaled columns with time columns
-    df = pd.concat([scaled_non_time_df, time_data], axis=1)
-    data = df[feature_cols].to_numpy(dtype=np.float32)
-
-    num_samples = data.shape[0]
-    num_features = data.shape[1]
-
-    if num_samples < window_size:
+    
+    # Store original column order
+    original_order = [col for col in df.columns if col in feature_cols]
+    
+    # Scale non-time features if they exist
+    if non_time_cols:
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(df[non_time_cols].astype(np.float32))
+        
+        # Create a temporary dataframe with scaled data
+        temp_df = pd.DataFrame(scaled_data, columns=non_time_cols, index=df.index)
+        
+        # Combine scaled and time data while preserving order
+        for col in original_order:
+            if col in time_cols:
+                temp_df[col] = df[col]
+        
+        # Reorder columns to match original
+        df = temp_df[original_order]
+    
+    # Convert to numpy array
+    data = df.to_numpy(dtype=np.float32)
+    
+    if data.shape[0] < window_size:
         raise ValueError("Not enough data points to form a single sequence of length window_size.")
-
-
-    data = create_sequences(data, window_size, stride)
-    # X shape: (num_sequences, window_size, num_features)
-
-    # Convert to PyTorch Tensors and move them to gpu
-    data = torch.tensor(data, dtype=torch.float32).to(device)
-
-    # Create Datasets and DataLoaders
-    return DataLoader(TensorDataset(data), batch_size=batch_size, shuffle=True)
+    
+    # Create sequences
+    sequences = []
+    for start_idx in range(0, data.shape[0] - window_size + 1, stride):
+        sequences.append(data[start_idx:start_idx + window_size])
+    sequences = np.array(sequences)
+    # Convert directly to tensor and create DataLoader
+    tensor_data = torch.tensor(sequences, dtype=torch.float32,device = "cpu")
+    dataset = TensorDataset(tensor_data)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 # Training and Evaluation Functions
 def train_model(model, dataloader, optimizer, criterion, device, scheduler, epochs=100, val_loader = None):
