@@ -8,3 +8,5 @@
 .DS_STORE
 *.csv
 *.pkl
+tiktok_likes.db
+tiktok_download.log

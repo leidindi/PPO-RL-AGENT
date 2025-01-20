@@ -30,7 +30,7 @@ class PPOMemory:
 
     def generate_batches(self):
         if len(self.states) < self.batch_size:
-            # cant chop up the training samples when there arent enough for our batch size
+            # cant chop up the training samples when there arent enough for a single batch size
             raise ValueError
         n_states = len(self.states)
         batch_start = np.arange(0, n_states, self.batch_size)
