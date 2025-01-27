@@ -169,7 +169,7 @@ class Agent:
         self.critic.load_checkpoint()
         print('... model has been loaded ...')
 
-    def choose_action(self, observation, debug = False):
+    def choose_action(self, observation, epsilon = 0.0, debug = False):
         #debug state output
         if debug:
             print(f'observation before fix {observation}')
@@ -187,8 +187,12 @@ class Agent:
         dist = self.actor(state)
         value = self.critic(state)
         action = dist.sample()
-
         probs = dist.log_prob(action)
+
+        if np.random.rand() > epsilon:
+            #print('Random action taken')
+            action = torch.randint(0, 3, value.shape, device=value.device).squeeze()
+            #probs = torch.zeros_like(probs, device=value.device) + 1/3
 
         #probs = torch.squeeze(probs).item()
         #action = torch.squeeze(action).item()

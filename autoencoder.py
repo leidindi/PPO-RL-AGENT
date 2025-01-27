@@ -360,65 +360,99 @@ class DenseAutoencoder(nn.Module):
         return reconstructed
   
 
-def load_csv_for_autoencoder(csv_file, feature_cols = ["mid_price","imbalance_take_price","imbalance_feed_price","imbalance_regulation_state","month","day_of_week","hour_of_day"], 
+def load_csv_for_autoencoder(csv_file, feature_cols = ["mid_price","imbalance_take_price","imbalance_feed_price","imbalance_regulation_state","month","day_of_week","hour_of_day"],
                              window_size = 60*24, stride = 30, batch_size = 64):
     """
     Creates a PyTorch DataLoader from a CSV file containing time series data.
-    
+   
     Args:
         csv_file (str): Path to the CSV file containing the data
         feature_cols (list): List of column names to use as features
         window_size (int): Size of the sliding window for sequence creation
         stride (int): Number of steps to move the window forward
         batch_size (int): Size of batches for the DataLoader
-    
+   
     Returns:
         DataLoader: PyTorch DataLoader containing the sequences
-        
-    Raises:
-        ValueError: If the data has fewer samples than the window_size
-    
-    Notes:
-        Time columns ('month', 'day_of_week', 'hour_of_day') are preserved without scaling,
-        while other features are scaled to range (-1, 1). Original column order is maintained.
     """
     df = pd.read_csv(csv_file)
-    
+   
     time_cols = ['month', 'day_of_week', 'hour_of_day']
-    non_time_cols = [c for c in df.columns if ((c not in time_cols) and (c in feature_cols))]
-    
+    non_time_cols = [col for col in df.columns if ((col not in time_cols) and (col in feature_cols))]
+   
     # Store original column order
     original_order = [col for col in df.columns if col in feature_cols]
-    
+
+    def log_scale_with_zeros(data):
+        """Log scaling that preserves zeros while handling price magnitudes."""
+
+        # Convert input data to tensor if it isn't already
+        data_tensor = torch.tensor(data) if not isinstance(data, torch.Tensor) else data
+        zero_mask = (data_tensor == 0)
+        # Take log of non-zero values
+        signs = torch.sign(data_tensor)
+        abs_vals = torch.abs(data_tensor)
+        logged = signs * torch.log1p(abs_vals)
+        # Normalize the logged values
+        logged_min = torch.min(logged[~zero_mask]) if torch.any(~zero_mask) else 0
+        logged_max = torch.max(logged)
+        if logged_max == logged_min:
+            scaled = torch.zeros_like(logged)
+        else:
+            scaled = (logged - logged_min) / (logged_max - logged_min)
+        # Restore zeros
+        final_data = torch.where(zero_mask, torch.zeros_like(scaled), scaled)
+        return final_data.numpy()
+
+    def robust_scale_with_zeros(data):
+        """Robust scaling using median and IQR, preserving zeros."""
+        zero_mask = (data == 0)
+        non_zero_data = data[~zero_mask]
+        
+        # Calculate median and IQR on non-zero values
+        median = np.median(non_zero_data)
+        q75, q25 = np.percentile(non_zero_data, [75, 25])
+        iqr = q75 - q25
+        
+        # Scale data
+        scaled = (data - median) / (iqr + 1e-8)  # small epsilon to prevent division by 0
+        # Restore zeros
+        return np.where(zero_mask, np.zeros_like(scaled), scaled)
+   
     # Scale non-time features if they exist
     if non_time_cols:
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_data = scaler.fit_transform(df[non_time_cols].astype(np.float32))
+        # Create a temporary dataframe for scaled data
+        temp_df = pd.DataFrame(index=df.index)
         
-        # Create a temporary dataframe with scaled data
-        temp_df = pd.DataFrame(scaled_data, columns=non_time_cols, index=df.index)
-        
-        # Combine scaled and time data while preserving order
+        for col in non_time_cols:
+            # Using log scaling (active)
+            temp_df[col] = log_scale_with_zeros(df[col].values)
+            
+            # Using robust scaling (commented out)
+            # temp_df[col] = robust_scale_with_zeros(df[col].values)
+       
+        # Add time columns while preserving order
         for col in original_order:
             if col in time_cols:
                 temp_df[col] = df[col]
-        
+       
         # Reorder columns to match original
         df = temp_df[original_order]
-    
+   
     # Convert to numpy array
     data = df.to_numpy(dtype=np.float32)
-    
+   
     if data.shape[0] < window_size:
         raise ValueError("Not enough data points to form a single sequence of length window_size.")
-    
+   
     # Create sequences
     sequences = []
     for start_idx in range(0, data.shape[0] - window_size + 1, stride):
         sequences.append(data[start_idx:start_idx + window_size])
     sequences = np.array(sequences)
+    
     # Convert directly to tensor and create DataLoader
-    tensor_data = torch.tensor(sequences, dtype=torch.float32,device = "cpu")
+    tensor_data = torch.tensor(sequences, dtype=torch.float32, device="cpu")
     dataset = TensorDataset(tensor_data)
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 

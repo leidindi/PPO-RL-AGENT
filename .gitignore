@@ -10,3 +10,5 @@
 *.pkl
 tiktok_likes.db
 tiktok_download.log
+tmp/ppo/actor_torch_ppo
+tmp/ppo/critic_torch_ppo
