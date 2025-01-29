@@ -18,56 +18,51 @@ def add_to_tensor(prev_collection, new_data):
         return new_data
 
 class PPOMemory:
-    def __init__(self, batch_size, device):
+    def __init__(self, batch_size, learning_length, device, input_dims):
         self.device = device
-        self.states = torch.tensor([], device=self.device) 
-        self.probs = torch.tensor([], device=self.device) 
-        self.vals = torch.tensor([], device=self.device) 
-        self.actions = torch.tensor([], device=self.device) 
-        self.rewards = torch.tensor([], device=self.device) 
-        self.dones = torch.tensor([], device=self.device)
         self.batch_size = batch_size
+        self.learning_length = learning_length
+        self.num_features = input_dims
 
-    def generate_batches(self):
-        if len(self.states) < self.batch_size:
-            # cant chop up the training samples when there arent enough for a single batch size
-            raise ValueError
-        n_states = len(self.states)
-        batch_start = np.arange(0, n_states, self.batch_size)
-        indices = np.arange(n_states, dtype=np.int64)
+        self.states = torch.zeros((self.batch_size, self.learning_length, self.num_features), device=self.device) 
+        self.probs = torch.zeros((self.batch_size, self.learning_length), device=self.device)  
+        self.vals = torch.zeros((self.batch_size, self.learning_length), device=self.device)  
+        self.actions = torch.zeros((self.batch_size, self.learning_length), device=self.device)  
+        self.rewards = torch.zeros((self.batch_size, self.learning_length), device=self.device) 
+        self.dones = torch.zeros((self.batch_size, self.learning_length), device=self.device) 
+
+        self.batch_size = batch_size
+        self.memory_counter = 0
+
+    def generate_batches(self, learning_batch_size = 256):
+        batch_start = np.arange(0, self.batch_size * self.learning_length, learning_batch_size)
+        indices = np.arange(self.batch_size * self.learning_length, dtype=np.int64)
         np.random.shuffle(indices)
-        batches = [indices[i:i+self.batch_size] for i in batch_start]
+        batches = [indices[i:i+learning_batch_size] for i in batch_start]
         return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, batches
 
 
 
     def store_memory(self, state, action, probs, vals, reward, done):
         # Ensure all inputs are tensors
-        state   = assure_tensor_type(state, self.device)
-        action  = assure_tensor_type(action,self.device)
-        probs   = assure_tensor_type(probs, self.device)
-        vals    = assure_tensor_type(vals,  self.device)
-        reward  = assure_tensor_type(reward,self.device)
-        done    = assure_tensor_type(done,  self.device)
+        self.states[:,self.memory_counter,:] = state
+        self.actions[:,self.memory_counter] = action
+        self.probs[:,self.memory_counter] = probs
+        self.vals[:,self.memory_counter] = vals
+        self.rewards[:,self.memory_counter] = reward
+        self.dones[:,self.memory_counter] =  done
 
-        # Append using torch.cat if empty object variable
-        
-
-        self.states     = add_to_tensor(self.states,    state)
-        self.actions    = add_to_tensor(self.actions,   action)
-        self.probs      = add_to_tensor(self.probs,     probs)
-        self.vals       = add_to_tensor(self.vals,      vals)
-        self.rewards    = add_to_tensor(self.rewards,   reward)
-        self.dones      = add_to_tensor(self.dones,     done)
+        self.memory_counter += 1
 
 
     def clear_memory(self):
-        self.states = torch.tensor(np.array([]), device=self.device) 
-        self.probs = torch.tensor(np.array([]), device=self.device) 
-        self.vals = torch.tensor(np.array([]), device=self.device) 
-        self.actions = torch.tensor(np.array([]), device=self.device) 
-        self.rewards = torch.tensor(np.array([]), device=self.device) 
-        self.dones = torch.tensor(np.array([]), device=self.device)
+        self.memory_counter = 0
+        self.states = torch.zeros((self.batch_size, self.learning_length, self.num_features), device=self.device) 
+        self.probs = torch.zeros((self.batch_size, self.learning_length), device=self.device)  
+        self.vals = torch.zeros((self.batch_size, self.learning_length), device=self.device)  
+        self.actions = torch.zeros((self.batch_size, self.learning_length), device=self.device)  
+        self.rewards = torch.zeros((self.batch_size, self.learning_length), device=self.device) 
+        self.dones = torch.zeros((self.batch_size, self.learning_length), device=self.device) 
 
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, alpha,
@@ -130,7 +125,7 @@ class CriticNetwork(nn.Module):
         assert state.shape != torch.Size([0]), "Error: torche tensor has an empty shape!"
         value = self.critic(state)
 
-        return value
+        return value.squeeze()
 
     def save_checkpoint(self):
         torch.save(self.state_dict(), self.checkpoint_file)
@@ -139,19 +134,22 @@ class CriticNetwork(nn.Module):
         self.load_state_dict(torch.load(self.checkpoint_file))
 
 class Agent:
-    def __init__(self, n_actions, input_dims, gamma=1, alpha=0.0003, gae_lambda=1,
-            policy_clip=0.15, batch_size=64, n_epochs=10, fc1_dims=256, fc2_dims=256, device="cuda"):
+    def __init__(self, n_actions, input_dims, gamma=0.99999, alpha=0.0003, gae_lambda=0.99999,
+            policy_clip=0.15, batch_size=64, learning_length = 1, n_epochs=10, fc1_dims=256, fc2_dims=256, device="cuda"):
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
         self.gae_lambda = gae_lambda
         self.device = device
+        self.batch_size = batch_size
+        if isinstance(input_dims, tuple):
+            self.input_dims = input_dims[0]
+        else:
+            self.input_dims = input_dims
 
         self.actor = ActorNetwork(n_actions, input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims, device=self.device)
         self.critic = CriticNetwork(input_dims, alpha,fc1_dims=fc1_dims,fc2_dims=fc2_dims, device=self.device)
-        self.memory = PPOMemory(batch_size, device=self.device)
-
-        self.stability_counter = 0
+        self.memory = PPOMemory(batch_size, learning_length, device=self.device, input_dims=self.input_dims)
        
     def remember(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -181,11 +179,9 @@ class Agent:
         if debug:
             print(f'observation after fix {observation}')   
 
-        observation = torch.tensor(np.array(observation), dtype=torch.float32)
-        state = observation.to(self.actor.device)
-        assert state.shape != torch.Size([0]), "Error: torch tensor has an empty shape!"
-        dist = self.actor(state)
-        value = self.critic(state)
+        assert observation.shape != torch.Size([0]), "Error: torch tensor has an empty shape!"
+        dist = self.actor(observation)
+        value = self.critic(observation)
         action = dist.sample()
         probs = dist.log_prob(action)
 
@@ -204,24 +200,14 @@ class Agent:
         for _ in range(self.n_epochs):
             
             #print(f'-Epoch number {_+1} has started')
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
+            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches(learning_batch_size=256)
 
             dones_arr = dones_arr.int()
-
-            print_shapes = False
-            if print_shapes:
-                print(state_arr.shape)
-                print(action_arr.shape)
-                print(old_prob_arr.shape)
-                print(vals_arr.shape)
-                print(reward_arr.shape)
-                print(dones_arr.shape)
-
-            vals_arr = torch.cat([vals_arr, torch.zeros(1, device=self.device)])
+            vals_arr = torch.cat([vals_arr, torch.zeros((self.batch_size,1), device=self.device)], dim=1)
 
             
             # Compute deltas including the immediate reward
-            deltas_arr = reward_arr + self.gamma * vals_arr[1:] * (1 - dones_arr) - vals_arr[:-1]
+            deltas_arr = reward_arr + self.gamma * vals_arr[:,1:] * (1 - dones_arr) - vals_arr[:,:-1]
 
             advantage_arr = torch.zeros_like(deltas_arr, device=self.device)
             
@@ -244,9 +230,9 @@ class Agent:
             # ---------------------------------------------------------------
             # new reverse cumulative sum with discount factors
             gae = 0
-            for t in reversed(range(len(deltas_arr))):
-                gae = deltas_arr[t] + self.gamma * self.gae_lambda * (1 - dones_arr[t]) * gae
-                advantage_arr[t] = gae
+            for t in reversed(range(deltas_arr.shape[1])):
+                gae = deltas_arr[:,t] + self.gamma * self.gae_lambda * (1 - dones_arr[:,t]) * gae
+                advantage_arr[:,t] = gae
             # --------------------------------------------------------------
 
         
@@ -257,8 +243,14 @@ class Agent:
             #print(f"advantage_arr device: {advantage_arr.device}, shape: {advantage_arr.shape}") 
             #print(f"deltas_arr device: {deltas_arr.device}, shape: {deltas_arr.shape}")    
 
+            state_arr = state_arr.reshape(-1, self.input_dims)
+            old_prob_arr = old_prob_arr.reshape(-1)
+            action_arr = action_arr.reshape(-1)
+            vals_arr = vals_arr[:,:-1].reshape(-1)
+            advantage_arr = advantage_arr.reshape(-1)
+
+
             for batch in batches:
-                self.stability_counter += 1
                 # assure there are no gradients in the beginning
                 self.actor.optimizer.zero_grad()
                 self.critic.optimizer.zero_grad()
@@ -272,7 +264,6 @@ class Agent:
 
                 dist = self.actor(states)
                 critic_value = self.critic(states)
-                critic_value = torch.squeeze(critic_value)
 
                 new_probs = dist.log_prob(actions)
                 #prob_ratio = new_probs.exp() / old_probs.exp()
@@ -298,11 +289,6 @@ class Agent:
                 total_loss.backward()
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
-
-                #if self.stability_counter % 100 == 0:
-                    #print(f'--Gradients calculated n*100 with loss:')
-                    #print(total_loss)
-
         self.memory.clear_memory()
 
 

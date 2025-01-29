@@ -2,6 +2,7 @@ import numpy as np
 from scipy.interpolate import CubicSpline
 import os
 import pandas as pd
+import glob
 
 # Updated function with cleaning for invalid characters in dates
 def create_inflation_correction_function_with_cleaning(csv_file_path):
@@ -230,5 +231,29 @@ def apply_date_conv():
             # Simulate training time
             time.sleep(0.1)
 
+
+def apply_reg_state_live_to_csv():
+    csv_files = glob.glob('final-imbalance-data-sanity-test.csv')
+
+    def add_reg_state_column(df):
+        # Placeholder function - replace with your actual implementation
+        return df
+
+    # Process each file
+    for file in csv_files:
+        # Read the CSV
+        df = pd.read_csv(file)
+        
+        if 'live_state' not in df.columns:
+            print(f"Adding live_state column to {file}")
+            df = add_reg_state_column(df)
+        else:
+            print(f"live_state column already exists in {file}")
+        # Optionally save the processed file
+        # output_file = file.replace('.csv', '_processed.csv')
+        # df.to_csv(output_file, index=False)
+
+    print(f"Processed {len(csv_files)} files")
+
 if __name__ == '__main__':
-    apply_date_conv()
+    apply_reg_state_live_to_csv()
