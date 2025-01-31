@@ -245,7 +245,7 @@ class BatteryMarketEnv(gym.Env):
         
         # Get the next observations (already batched)
         obs = self._get_observation()
-        
+         
         # Create truncated array (required for Gymnasium)
         truncated = torch.zeros(self.batch_size, dtype=torch.bool, device=self.device)
         
