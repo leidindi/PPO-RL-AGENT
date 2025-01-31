@@ -240,8 +240,7 @@ class BatteryMarketEnv(gym.Env):
             self.quarter_discharge.zero_()
         
         # Update time step (same for all environments)
-        self.current_step += 1
-        done_condition = self.encoder_dimmension + self.current_step >= self.window_size - 1
+        done_condition = self.encoder_dimmension + self.current_step >= self.window_size
         dones = torch.full((self.batch_size,), done_condition, dtype=torch.bool, device=self.device)
         
         # Get the next observations (already batched)
@@ -258,6 +257,7 @@ class BatteryMarketEnv(gym.Env):
         'cash_balance': self.cash_balance.clone().detach()
         }
         
+        self.current_step += 1
         # Handle Gymnasium's step API requirements
         return obs, rewards, dones, truncated, infos
 
@@ -373,9 +373,9 @@ class BatteryMarketEnv(gym.Env):
     def _get_observation(self):
         """Get the current state of the environment."""
 
-        historical_data = self.episode[:,:,self.encoder_dimmension+self.current_step]
+        historical_data = self.episode[:,:,self.encoder_dimmension+self.current_step-1]
 
-        if self.current_step % 15 == 0 and self.current_step > 0:
+        if self.current_step % 15 == 0:
             # a new 15 minute block
             self.current_context = self.encoded_episode[:,self.current_step//15,:]
             self.quarter_feed       = historical_data[:,-8]

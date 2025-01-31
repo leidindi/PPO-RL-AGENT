@@ -34,11 +34,30 @@ class PPOMemory:
         self.batch_size = batch_size
         self.memory_counter = 0
 
-    def generate_batches(self, learning_batch_size = 256):
-        batch_start = np.arange(0, self.batch_size * self.learning_length, learning_batch_size)
-        indices = np.arange(self.batch_size * self.learning_length, dtype=np.int64)
+    def generate_batches(self, learning_batch_size=256):
+        # Calculate total size of the data
+        total_size = self.batch_size * self.learning_length
+        
+        # Create indices and shuffle them
+        indices = np.arange(total_size, dtype=np.int64)
         np.random.shuffle(indices)
-        batches = [indices[i:i+learning_batch_size] for i in batch_start]
+        
+        # Calculate number of complete batches
+        n_batches = total_size // learning_batch_size
+        
+        # Create batches of the correct size
+        batches = []
+        for i in range(n_batches):
+            start_idx = i * learning_batch_size
+            batch_indices = indices[start_idx:start_idx + learning_batch_size]
+            batches.append(batch_indices)
+        
+        # Handle any remaining data (optional)
+        if total_size % learning_batch_size != 0:
+            remaining_indices = indices[n_batches * learning_batch_size:]
+            if len(remaining_indices) > 0:
+                batches.append(remaining_indices)
+        
         return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, batches
 
 
@@ -197,83 +216,105 @@ class Agent:
         return action, probs, value
 
     def learn(self):
+        # Enable anomaly detection for debugging
+        torch.autograd.set_detect_anomaly(True)
+        
         for _ in range(self.n_epochs):
             # Process all data at once instead of generating batches multiple times
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = \
-                self.memory.generate_batches(learning_batch_size=512)  # Increased batch size
+                self.memory.generate_batches(learning_batch_size=256)
 
             dones_arr = dones_arr.int()
             
-            # Compute all values at once using vectorized operations
-            with torch.no_grad():  # Prevent unnecessary gradient computation
-                next_vals = torch.cat([vals_arr[:, 1:], 
-                                    torch.zeros((self.batch_size, 1), device=self.device)], dim=1)
-                deltas_arr = reward_arr + self.gamma * next_vals * (1 - dones_arr) - vals_arr
-
-                # Vectorized GAE computation
-                advantages_reversed = []
-                gae = torch.zeros(self.batch_size, device=self.device)
-                
-                for delta, done in zip(deltas_arr.transpose(0, 1).flip(0), 
-                                    dones_arr.transpose(0, 1).flip(0)):
-                    gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
-                    advantages_reversed.append(gae)
-                
-                advantage_arr = torch.stack(advantages_reversed[::-1], dim=1)
-
-            # Reshape all tensors at once
-            state_arr = state_arr.reshape(-1, self.input_dims)
-            old_prob_arr = old_prob_arr.reshape(-1)
-            action_arr = action_arr.reshape(-1)
-            vals_arr = vals_arr[:, :-1].reshape(-1)
-            advantage_arr = advantage_arr.reshape(-1)
+            # Create a separate tensor for next values
+            next_vals = torch.cat([vals_arr[:, 1:], 
+                                torch.zeros((self.batch_size, 1), device=self.device)], dim=1)
             
-            # Normalize advantages for better training stability
-            advantage_arr = (advantage_arr - advantage_arr.mean()) / (advantage_arr.std() + 1e-8)
+            # Compute advantages using fresh tensors
+            with torch.no_grad():
+                # Compute deltas without modifying original tensors
+                deltas = reward_arr + self.gamma * next_vals * (1 - dones_arr) - vals_arr
+                
+                # GAE computation with explicit new tensor creation
+                advantages = torch.zeros_like(deltas, device=self.device)
+                last_gae = torch.zeros(self.batch_size, device=self.device)
+                
+                for t in reversed(range(deltas.size(1))):
+                    # Create new tensors for each computation
+                    last_gae = deltas[:, t] + \
+                            self.gamma * self.gae_lambda * \
+                            (1 - dones_arr[:, t]) * last_gae
+                    advantages[:, t] = last_gae.clone()
+                
+                # Normalize advantages with new tensor creation
+                advantage_mean = advantages.mean()
+                advantage_std = advantages.std() + 1e-8
+                normalized_advantages = (advantages - advantage_mean) / advantage_std
+                
+                # Create fresh tensors for all reshaping operations
+                states = state_arr.reshape(-1, self.input_dims).clone()
+                old_probs = old_prob_arr.reshape(-1).clone()
+                actions = action_arr.reshape(-1).clone()
+                values = vals_arr.reshape(-1).clone()
+                advantages = normalized_advantages.reshape(-1).clone()
 
             for batch in batches:
-                # Get batch data - no need for detach() and clone() since we're not modifying these
-                states = state_arr[batch]
-                old_probs = old_prob_arr[batch]
-                actions = action_arr[batch]
-                values = vals_arr[batch]
-                advantage = advantage_arr[batch]
+                # Create fresh batch tensors
+                batch_states = states[batch]
+                batch_old_probs = old_probs[batch]
+                batch_actions = actions[batch]
+                try:
+                    batch_values = values[batch]
+                except:
+                    pass
+                batch_advantages = advantages[batch]
 
-                # Zero gradients once for both networks
-                self.actor.optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+                # Zero gradients
+                self.actor.optimizer.zero_grad(set_to_none=True)
                 self.critic.optimizer.zero_grad(set_to_none=True)
 
                 # Forward passes
-                dist = self.actor(states)
-                critic_value = self.critic(states)
+                dist = self.actor(batch_states)
+                critic_value = self.critic(batch_states)
                 
-                # Compute actor loss
-                new_probs = dist.log_prob(actions)
-                prob_ratio = (new_probs - old_probs).exp()
+                # Compute losses with explicit new tensor creation
+                new_probs = dist.log_prob(batch_actions)
+                prob_ratio = (new_probs - batch_old_probs).exp()
                 
-                # Vectorized loss computation
-                weighted_probs = advantage * prob_ratio
-                weighted_clipped_probs = torch.clamp(prob_ratio, 
-                                                1-self.policy_clip, 
-                                                1+self.policy_clip) * advantage
+                # Create separate tensors for each operation
+                weighted_probs = batch_advantages * prob_ratio
+                clipped_ratio = torch.clamp(prob_ratio, 
+                                        1-self.policy_clip, 
+                                        1+self.policy_clip)
+                weighted_clipped_probs = batch_advantages * clipped_ratio
                 
+                # Compute final losses
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
-                
-                # Compute critic loss
-                returns = advantage + values
+                returns = batch_advantages + batch_values
                 critic_loss = 0.5 * ((returns - critic_value) ** 2).mean()
                 
-                # Combined loss and backprop
+                # Compute total loss and backward pass
                 total_loss = actor_loss + critic_loss
-                total_loss.backward()
                 
-                # Optional: Gradient clipping for stability
+                try:
+                    total_loss.backward()
+                except RuntimeError as e:
+                    print(f"Error during backward pass: {e}")
+                    print(f"Actor loss: {actor_loss}")
+                    print(f"Critic loss: {critic_loss}")
+                    print(f"Advantage shape: {batch_advantages.shape}")
+                    print(f"Prob ratio shape: {prob_ratio.shape}")
+                    raise e
+                
+                # Clip gradients
                 torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=0.5)
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
                 
-                # Update both networks
+                # Update networks
                 self.actor.optimizer.step()
                 self.critic.optimizer.step()
 
+        # Disable anomaly detection after training
+        torch.autograd.set_detect_anomaly(False)
         self.memory.clear_memory()
 
