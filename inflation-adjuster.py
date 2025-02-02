@@ -256,4 +256,5 @@ def apply_reg_state_live_to_csv():
     print(f"Processed {len(csv_files)} files")
 
 if __name__ == '__main__':
-    apply_reg_state_live_to_csv()
+    #apply_reg_state_live_to_csv() 
+    pass

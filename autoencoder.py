@@ -425,12 +425,15 @@ def load_csv_for_autoencoder(csv_file, feature_cols = ["mid_price","imbalance_ta
         temp_df = pd.DataFrame(index=df.index)
         
         for col in non_time_cols:
-            # Using log scaling (active)
-            temp_df[col] = log_scale_with_zeros(df[col].values)
+            # Using log scaling (commented out)
+            #temp_df[col] = log_scale_with_zeros(df[col].values)
             
             # Using robust scaling (commented out)
             # temp_df[col] = robust_scale_with_zeros(df[col].values)
-       
+
+            # no scaling (active)
+            temp_df[col] = df[col].values
+            
         # Add time columns while preserving order
         for col in original_order:
             if col in time_cols:

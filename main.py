@@ -42,14 +42,21 @@ class BatteryMarketEnv(gym.Env):
         self.current_context = None
 
         # Environment constants
-        self.battery_capacity = 2.0  # MWh
-        self.charge_speed = 1.0  # MW (2 hours until full charge)
-        self.cycle_cost = 80.0 # Cost per full charge/discharge cycle
-        self.battery_limit = 0.1
+        # MWh (1.0 - 4.0 MWh)
+        self.battery_capacity = 1.0 + torch.rand(self.batch_size, device=self.device) * 3
+        # MW (1 - 3 MW, taking 4 hours to charge worst case, 1/3 hour best case)
+        self.charge_speed  = 1.0 + torch.rand(self.batch_size, device=self.device) * 2 
+        # Cost per full charge/discharge cycle ( free to 160 euros)
+        self.cycle_cost = torch.rand(self.batch_size, device=self.device) * 160 
+        # Random battery limits for each environment
+        self.battery_limit = torch.rand(self.batch_size, device=self.device) * 0.2
+
+        
+        # Cycle costs for charging and discharging
+        self.minute_cycle_cost = (self.charge_speed / 60.0) * (self.cycle_cost/self.battery_capacity)
 
         # State variables
-        self.battery_status  = torch.zeros(self.batch_size, device=self.device) + 1.0  # Initial battery charge level (in MWh)
-        self.cash_balance  = torch.zeros(self.batch_size, device=self.device)  # Initial cash balance
+        self.battery_status  = self.battery_capacity * 0.5  # Initial battery charge level (in MWh)  
         self.current_step = 0  # Track the current time step
         
         self.quarter_charge     = torch.zeros(self.batch_size, device=self.device)
@@ -72,14 +79,15 @@ class BatteryMarketEnv(gym.Env):
         )
 
         # Observation space (compressed data + battery variables)
+        features = 275
         # Compressed market data: 16 features + battery status + average price + cash balance
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(270,), # This value will need to change as features are introduced
+            shape=(features,), # This value will need to change as features are introduced
             dtype=np.float32
         )
-        self.obs = torch.zeros(self.batch_size, 270, device=self.device)
+        self.obs = torch.zeros(self.batch_size, features, device=self.device)
         # Action space: -1 (discharge), 0 (do nothing), 1 (charge)
         self.action_space = spaces.Discrete(3)
 
@@ -94,7 +102,6 @@ class BatteryMarketEnv(gym.Env):
         # Reset environment state - combine initializations to reduce tensor creations
         device = self.device
         self.battery_status = torch.ones(self.batch_size, device=device)
-        self.cash_balance = torch.zeros(self.batch_size, device=device)
         self.current_step = torch.tensor(0, device=device)
         
         # Initialize all quarter variables at once
@@ -161,6 +168,21 @@ class BatteryMarketEnv(gym.Env):
         self.encoded_episode = self.encoded_episode.view(shape[0], shape[1], -1)
         self.current_context = self.encoded_episode[:, 0].clone()  # Use clone to avoid reference
         
+        self.battery_capacity = 1.0 + torch.rand(self.batch_size, device=self.device) * 3
+        # MW (1 - 3 MW, taking 4 hours to charge worst case, 1/3 hour best case)
+        self.charge_speed  = 1.0 + torch.rand(self.batch_size, device=self.device) * 2 
+        # Cost per full charge/discharge cycle ( free to 160 euros)
+        self.cycle_cost = torch.rand(self.batch_size, device=self.device) * 160 
+        # Random battery limits for each environment
+        self.battery_limit = torch.rand(self.batch_size, device=self.device) * 0.2
+
+        
+        # Cycle costs for charging and discharging
+        self.minute_cycle_cost = (self.charge_speed / 60.0) * (self.cycle_cost/self.battery_capacity)
+
+        # State variables
+        self.battery_status  = self.battery_capacity * 0.5  # Initial battery charge level (in MWh)  
+
         # Clean up
         del compressed_context
         torch.cuda.empty_cache()
@@ -190,28 +212,32 @@ class BatteryMarketEnv(gym.Env):
         charge_changes = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
         
         # Calculate potential charge changes for all environments
-        max_charge_change = torch.minimum(
-        torch.tensor(self.charge_speed / 60.0, device=self.device),
-        self.battery_capacity * (1 - self.battery_limit) - self.battery_status)
+        max_charge = torch.minimum(self.charge_speed / 60.0, self.battery_capacity*(1 - self.battery_limit) - self.battery_status)
         # Ensure no negative charge changes
-        charge_changes = torch.maximum(max_charge_change, torch.tensor(0.0, device=self.device))
-    
+        max_charge = torch.maximum(max_charge, torch.zeros_like(max_charge))
+
+        max_discharge = torch.minimum(self.charge_speed / 60.0, self.battery_status - self.battery_capacity*(self.battery_limit))
+        max_discharge = torch.maximum(max_discharge, torch.zeros_like(max_discharge))
         
         # Handle charging (action == 1)
         charging_mask = (actions == 1)
         if charging_mask.any():
-            self.quarter_charge[charging_mask] += charge_changes[charging_mask]
+            self.quarter_charge[charging_mask] += max_charge[charging_mask]
+
+            self.battery_status[charging_mask] += max_charge[charging_mask]
         
         # Handle discharging (action == -1)
         discharging_mask = (actions == -1)
         if discharging_mask.any():
-            self.quarter_discharge[discharging_mask] += charge_changes[discharging_mask]
+
+            self.quarter_discharge[discharging_mask] += max_discharge[discharging_mask]
+            
+            self.battery_status[discharging_mask] -= max_discharge[discharging_mask]
         
         # Apply cycle costs for active batteries (charging or discharging)
         active_mask = (actions != 0)
         if active_mask.any():
-            #cycle_costs = -np.log(((self.charge_speed / (60.0*self.battery_capacity)) * self.cycle_cost + 1)
-            rewards[active_mask] -= 0.221848749616
+            rewards[active_mask] -= self.minute_cycle_cost[active_mask]
         
         # Handle end of 15-minute period
         if self.current_step % 15 == 0 and self.current_step > 0:
@@ -221,25 +247,23 @@ class BatteryMarketEnv(gym.Env):
             discharging_prices = self._get_price(self.quarter_state, -1)
 
             net_discharge_mask = (self.quarter_charge - self.quarter_discharge) < 0
-            net_charge_mask = (self.quarter_discharge - self.quarter_charge) < 0
-            # Update cash balances and rewards
-            self.battery_status[net_discharge_mask] += (self.quarter_discharge - self.quarter_charge)[net_discharge_mask]
-            self.battery_status[net_charge_mask] += (self.quarter_charge - self.quarter_discharge)[net_charge_mask]
-
+            net_charge_mask = (self.quarter_discharge - self.quarter_charge) < 0      
+            
             # For net discharge masks
             discharge_rewards = (self.quarter_discharge - self.quarter_charge)[net_discharge_mask] * discharging_prices[net_discharge_mask]
-            rewards[net_discharge_mask] = torch.sign(torch.exp(rewards[net_discharge_mask]) + discharge_rewards + 1e-09) * \
-                                        torch.log1p(torch.abs(torch.exp(rewards[net_discharge_mask]) + discharge_rewards + 1e-09))
+            rewards[net_discharge_mask] += discharge_rewards
 
             # For net charge masks
             charge_rewards = (self.quarter_charge - self.quarter_discharge)[net_charge_mask] * charging_prices[net_charge_mask]
-            rewards[net_charge_mask] = torch.sign(torch.exp(rewards[net_charge_mask]) + charge_rewards + 1e-09) * \
-                                    torch.log1p(torch.abs(torch.exp(rewards[net_charge_mask]) + charge_rewards + 1e-09))
+            rewards[net_charge_mask] = charge_rewards
             # Reset quarter accumulators
             self.quarter_charge.zero_()
             self.quarter_discharge.zero_()
         
         # Update time step (same for all environments)
+        
+        self.current_step += 1
+        
         done_condition = self.encoder_dimmension + self.current_step >= self.window_size
         dones = torch.full((self.batch_size,), done_condition, dtype=torch.bool, device=self.device)
         
@@ -253,11 +277,9 @@ class BatteryMarketEnv(gym.Env):
         infos = {
         'quarter_charge': self.quarter_charge.clone().detach(),
         'quarter_discharge': self.quarter_discharge.clone().detach(),
-        'battery_status': self.battery_status.clone().detach(),
-        'cash_balance': self.cash_balance.clone().detach()
+        'battery_status': self.battery_status.clone().detach()
         }
         
-        self.current_step += 1
         # Handle Gymnasium's step API requirements
         return obs, rewards, dones, truncated, infos
 
@@ -375,7 +397,7 @@ class BatteryMarketEnv(gym.Env):
 
         historical_data = self.episode[:,:,self.encoder_dimmension+self.current_step-1]
 
-        if self.current_step % 15 == 0:
+        if (self.current_step - 1) % 15 == 0:
             # a new 15 minute block
             self.current_context = self.encoded_episode[:,self.current_step//15,:]
             self.quarter_feed       = historical_data[:,-8]
@@ -443,7 +465,6 @@ class BatteryMarketEnv(gym.Env):
 
         # entire game variables
         self.obs[:,256:257] = self.battery_status.clone().detach().view(self.batch_size,1)
-        #self.cash_balance.clone().detach().view(self.batch_size,1),
 
         # quarter dependent variable
         # for charge and discharge
@@ -470,6 +491,15 @@ class BatteryMarketEnv(gym.Env):
         self.obs[:,268:269] = historical_data[:,-5].clone().detach().view(self.batch_size,1)
         #hour_cyclical
         self.obs[:,269:270] = historical_data[:,-4].clone().detach().view(self.batch_size,1)
+
+        # battery variables, context independent
+        self.obs[:,270:271] = self.battery_capacity.clone().detach().view(self.batch_size,1)
+        self.obs[:,271:272] = self.charge_speed.clone().detach().view(self.batch_size,1)
+        self.obs[:,272:273] = self.cycle_cost.clone().detach().view(self.batch_size,1)
+        self.obs[:,273:274] = self.battery_limit.clone().detach().view(self.batch_size,1)
+        self.obs[:,274:275] = self.minute_cycle_cost.clone().detach().view(self.batch_size,1)
+
+
         
         if (self.battery_status/self.battery_capacity > 1).any() or (self.battery_status < 0).any():
             raise ValueError
@@ -478,8 +508,7 @@ class BatteryMarketEnv(gym.Env):
 
     def render(self, mode="human"):
         """Render the environment state."""
-        print(f"Step: {self.current_step}, Battery: {self.battery_status:.2f} MWh, " 
-              f"Cash: {self.cash_balance:.2f}, Price: {self._get_price():.2f}")
+        print(f"Step: {self.current_step}, Battery: {self.battery_status:.2f} MWh, ")
 
     def close(self):
         """Clean up resources."""
@@ -616,7 +645,7 @@ if __name__ == '__main__':
     batch_size = 10
     env = BatteryMarketEnv(csv_path="final-imbalance-data-sanity-test.csv",autoencoder_model=combined_autoencoder,batch_size=batch_size, device=device_used)
     env_name = "Custom"
-    n_epochs = 10
+    n_epochs = 5
     alpha = 0.0001
     learning_length = 1440
     n_games = 100
@@ -648,7 +677,7 @@ if __name__ == '__main__':
     done = False
     truncated = False
 
-    progress = DualProgress(n_games, env.window_size - env.encoder_dimmension + 1)
+    progress = DualProgress(n_games, env.window_size - env.encoder_dimmension)
 
     for i in range(n_games):
         observation = env.reset()
